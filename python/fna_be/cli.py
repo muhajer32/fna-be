@@ -394,9 +394,9 @@ def _run_validation_checks(verbose: bool) -> bool:
         from main import _open_workbook
 
         wb = _open_workbook()
-        sheet_names = {sheet.name for sheet in wb.sheets}
+        sheet_names = set(wb.sheetnames)
     except Exception as exc:
-        typer.echo(f"ERROR: could not open input workbook via xlwings: {exc}")
+        typer.echo(f"ERROR: could not open input workbook: {exc}")
         return False
 
     missing_required = [name for name in EXPECTED_INPUT_SHEETS if name not in sheet_names]

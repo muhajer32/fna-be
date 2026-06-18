@@ -31,7 +31,6 @@ Per-year outputs
 from __future__ import annotations
 
 import copy
-import importlib
 import logging
 import sys
 import time
@@ -52,13 +51,13 @@ from main import (
     _configure_logging,
     _ensure_directories,
     _open_output_workbook,
+    _open_workbook,
     _reset_output_workbook,
     run_monte_carlo,
     run_optimisation,
 )
 
 log = logging.getLogger("multi_year")
-xw = importlib.import_module("xlwings")
 
 CANDIDATE_FUTURE_YEARS: list[int] = [2030, 2035]
 
@@ -129,7 +128,7 @@ def run_all_years(wb: Any | None = None, started_at: float | None = None) -> dic
     out_wb = _open_output_workbook(wb)
     write_cross_year_to_excel(out_wb, year_metrics, img_dir=PROJECT_ROOT / "data" / "outputs" / "cross_year" / "images")
 
-    out_wb.save()
+    out_wb.save(output_excel_path())
     log.info("Multi-year run complete for years %s. Output workbook saved to %s.", years, output_excel_path())
     return year_outputs
 
@@ -187,16 +186,5 @@ def _inputs_for_year(base_inputs: dict[str, Any], year: int) -> dict[str, Any]:
     return inputs
 
 
-def _open_workbook():
-    try:
-        return xw.Book.caller()
-    except Exception:
-        wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-        return xw.Book(str(wb_path))
-
-
 if __name__ == "__main__":
-    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-    if wb_path.exists():
-        xw.Book(str(wb_path)).set_mock_caller()
     main()

@@ -43,7 +43,23 @@ python -m fna_be --help
 - **GAMS** (licensed) for optimisation runs — set `GAMS_EXE` in `.env`
 - **ENTSO-E API key** for `refresh-data` — set `ENTSOE_API_KEY` in `.env`
 - **PECD data** (not included — restricted redistribution): see `data/pecd/README.md`
-- macOS: grant Terminal **Automation → Microsoft Excel** permission for xlwings
+
+The model is **fully headless** — Excel I/O uses `openpyxl`, so no Microsoft
+Excel install (and no xlwings/COM automation) is required. It runs on Linux,
+macOS, or Windows, and in containers / cloud VMs.
+
+## Run in Docker (headless / cloud)
+
+```bash
+docker build -t fna .
+# audit / validate need no GAMS:
+docker run --rm -v "$PWD/excel:/app/excel" -v "$PWD/data:/app/data" fna validate
+# optimisation runs mount your licensed GAMS install:
+docker run --rm \
+  -v "$PWD/excel:/app/excel" -v "$PWD/data:/app/data" \
+  -v "/opt/gams:/opt/gams:ro" -e GAMS_EXE=/opt/gams/gams \
+  fna run-deterministic --target-year 2030
+```
 
 ## Repo layout
 

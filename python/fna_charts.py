@@ -501,56 +501,32 @@ def generate_fna_indicator_charts(
         return chart_paths
 
     if wb is not None:
-        sheet_name = f"17_FNA_Indicator_Charts{sheet_suffix}"
-        if sheet_name not in [s.name for s in wb.sheets]:
-            wb.sheets.add(name=sheet_name, after=wb.sheets[-1])
-        sht = wb.sheets[sheet_name]
-        _delete_pictures(sht)
-        sht.clear()
+        from io_excel import _add_image, _set_cell, _ws_get_or_create
 
-        sht["A1"].value = "FNA Indicator Charts (Sheets 14-16)"
-        sht["A2"].value = "Industry-standard visualisations of the ACER RES-integration, ramping and short-term flexibility indicators."
-        try:
-            sht["A1"].font.bold = True
-            sht["A1"].font.size = 16
-            sht["A2"].font.italic = True
-        except Exception:
-            pass
+        sheet_name = f"17_FNA_Indicator_Charts{sheet_suffix}"
+        sht = _ws_get_or_create(wb, sheet_name)
+
+        _set_cell(sht, "A1", "FNA Indicator Charts (Sheets 14-16)", bold=True, size=16)
+        _set_cell(sht, "A2", "Industry-standard visualisations of the ACER RES-integration, ramping and short-term flexibility indicators.", italic=True)
 
         row = 4
         for title, charts in sections:
             if not charts:
                 continue
-            sht.range(f"A{row}").value = title
-            try:
-                sht.range(f"A{row}").font.bold = True
-            except Exception:
-                pass
+            _set_cell(sht, f"A{row}", title, bold=True)
             row += 1
             chart_row = row
             col_positions = ["A", "K"]
             for index, (key, img) in enumerate(charts.items()):
                 column = col_positions[index % len(col_positions)]
                 anchor_row = chart_row + (index // len(col_positions)) * 22
-                anchor = sht.range(f"{column}{anchor_row}")
                 try:
-                    sht.pictures.add(
-                        str(img),
-                        name=f"fna_chart_{sheet_suffix}_{key}",
-                        update=True,
-                        left=anchor.left,
-                        top=anchor.top,
-                        width=480,
-                    )
+                    _add_image(sht, img, f"{column}{anchor_row}", width=480)
                 except Exception as exc:
                     log.warning("Could not insert %s into Excel: %s", img, exc)
             n_rows = (len(charts) + len(col_positions) - 1) // len(col_positions)
             row = chart_row + n_rows * 22 + 1
 
-        try:
-            sht.autofit()
-        except Exception:
-            pass
         sort_xlwings_sheets(wb)
 
     log.info("Generated %d FNA indicator charts (sheet 17%s)", len(chart_paths), sheet_suffix)

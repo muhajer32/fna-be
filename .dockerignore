@@ -1,0 +1,25 @@
+# Keep the image small and reproducible.
+.venv/
+__pycache__/
+*.py[cod]
+.git/
+.gitignore
+.DS_Store
+~$*
+
+# Generated run artefacts — recreated at runtime.
+data/inputs/
+data/outputs/
+logs/
+
+# Large / restricted PECD data — mount at runtime instead.
+data/pecd/*
+!data/pecd/README.md
+
+# Working Excel copies — only the input + demo workbook are needed.
+excel/~$*
+excel/*-output.xlsx
+
+# Docs and local tooling.
+docs/
+.claude/

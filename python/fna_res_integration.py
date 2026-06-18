@@ -411,7 +411,11 @@ def _opt_num(value: Any) -> float | None:
 
 def main() -> None:
     """CLI entry point: read the latest GAMS outputs + workbook, write the report."""
-    import xlwings as xw
+    from openpyxl import load_workbook
+
+    from config import output_excel_path
+    from io_excel import _read_sheet
+    from main import _open_output_workbook
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -420,28 +424,24 @@ def main() -> None:
     residual = _read_csv_robust(out_dir / "residual.csv")
 
     wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-    wb = xw.Book(str(wb_path))
-    try:
-        res_portfolios = wb.sheets["07_RES_Portfolios"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        rep_hours = wb.sheets["02_RepHours"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        rep_hours.columns = [str(c).strip().lower() for c in rep_hours.columns]
-        control_df = wb.sheets["01_Control"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        control = _control_dict(control_df)
+    in_wb = load_workbook(wb_path, read_only=True, data_only=True)
+    res_portfolios = _read_sheet(in_wb, "07_RES_Portfolios")
+    rep_hours = _read_sheet(in_wb, "02_RepHours")
+    control = _control_dict(_read_sheet(in_wb, "01_Control"))
 
-        mc_results: dict[int, dict[str, pd.DataFrame]] = {}
-        for scenario_dir in sorted(out_dir.glob("scenario_*")):
-            disp_path = scenario_dir / "dispatch.csv"
-            if disp_path.exists():
-                idx = int(scenario_dir.name.split("_")[-1])
-                mc_results[idx] = {"dispatch": _read_csv_robust(disp_path)}
+    mc_results: dict[int, dict[str, pd.DataFrame]] = {}
+    for scenario_dir in sorted(out_dir.glob("scenario_*")):
+        disp_path = scenario_dir / "dispatch.csv"
+        if disp_path.exists():
+            idx = int(scenario_dir.name.split("_")[-1])
+            mc_results[idx] = {"dispatch": _read_csv_robust(disp_path)}
 
-        write_res_integration_to_excel(
-            wb, dispatch, residual, res_portfolios, rep_hours, control=control,
-            mc_results=mc_results or None,
-        )
-        wb.save()
-    finally:
-        wb.close()
+    out_wb = _open_output_workbook()
+    write_res_integration_to_excel(
+        out_wb, dispatch, residual, res_portfolios, rep_hours, control=control,
+        mc_results=mc_results or None,
+    )
+    out_wb.save(output_excel_path())
 
 
 if __name__ == "__main__":

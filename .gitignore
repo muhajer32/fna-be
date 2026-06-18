@@ -1,0 +1,37 @@
+# Virtual environment and secrets
+.venv/
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.pytest_cache/
+
+# macOS
+.DS_Store
+~$*
+
+# Generated GAMS / run data
+data/inputs/
+data/outputs/
+data/raw_be2023/
+logs/
+
+# Large / restricted datasets — not shipped; see data/pecd/README.md
+data/pecd/*
+!data/pecd/README.md
+
+# Working Excel copies — only demo_input.xlsx is tracked
+excel/*.xlsx
+!excel/demo_input.xlsx
+excel/~$*
+
+# Tooling / IDE
+.claude/
+.idea/
+.vscode/

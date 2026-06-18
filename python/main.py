@@ -7,7 +7,6 @@ override it for scripts and macros.
 """
 from __future__ import annotations
 
-import importlib
 import logging
 import shutil
 import sys
@@ -18,6 +17,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from openpyxl import Workbook, load_workbook
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -39,7 +39,6 @@ from plot_results import generate_all, generate_mc_summary_charts
 from run_gams import run_model
 
 log = logging.getLogger("main")
-xw = importlib.import_module("xlwings")
 
 
 def main() -> None:
@@ -123,7 +122,7 @@ def run_optimisation(
         generate_all(results=results, img_dir=Path(paths["img_dir"]), wb=out_wb)
 
         if save:
-            out_wb.save()
+            out_wb.save(output_excel_path())
         status(f"Done: deterministic optimisation completed in {_elapsed_since(started_at)}.")
         return results
     except Exception as exc:
@@ -185,7 +184,7 @@ def run_postprocess(
     generate_all(results=results, img_dir=Path(paths["img_dir"]), wb=out_wb)
 
     if save:
-        out_wb.save()
+        out_wb.save(output_excel_path())
     log.info("Done: post-processing completed in %s.", _elapsed_since(started_at))
     return results
 
@@ -313,7 +312,7 @@ def run_monte_carlo(
         write_mc_charts_to_excel(out_wb, chart_paths, len(mc_results), n_scenarios, sheet_suffix=sheet_suffix)
 
         if save:
-            out_wb.save()
+            out_wb.save(output_excel_path())
         status(f"Done: Monte Carlo completed with {len(mc_results)} successful scenarios in {_elapsed_since(started_at)}")
         log.info("Base case cost: %.0f EUR", _get_base_cost(mc_results))
         log.info("Cost std dev: %.0f EUR", _get_cost_std(mc_results))
@@ -368,35 +367,29 @@ def _configure_logging(log_file: Path) -> None:
 
 
 def _open_workbook():
-    try:
-        wb = xw.Book.caller()
-        return wb
-    except Exception:
-        wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-        return xw.Book(str(wb_path))
+    """Load the input workbook headlessly with openpyxl (read-only).
+
+    No live Excel/COM is required, so the model runs on any platform including
+    headless Linux containers. ``data_only=True`` reads cached cell values; the
+    FNA workbooks contain plain values (no live formulas) so this is exact.
+    """
+
+    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
+    return load_workbook(wb_path, read_only=True, data_only=True)
 
 
-def _open_output_workbook(input_wb: Any):
-    """Open (or create) the separate ``<input stem>-output.xlsx`` workbook
-    used for all results/charts, in the same Excel app as ``input_wb``."""
+def _open_output_workbook(input_wb: Any = None):
+    """Open (or create) the separate ``<input stem>-output.xlsx`` workbook used
+    for all results/charts. Loads the existing file when present (so post-process
+    runs update it in place); otherwise starts a clean, empty workbook."""
 
     out_path = output_excel_path()
-    app = input_wb.app
-
-    for book in app.books:
-        try:
-            if Path(book.fullname).resolve() == out_path.resolve():
-                return book
-        except Exception:
-            continue
-
     if out_path.exists():
-        return app.books.open(str(out_path))
+        return load_workbook(out_path)
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    book = app.books.add()
-    book.save(str(out_path))
-    return book
+    wb = Workbook()
+    wb.remove(wb.active)  # drop the default empty "Sheet"; real sheets are added on write
+    return wb
 
 
 def _ensure_directories(paths: dict[str, Any] | None = None) -> None:
@@ -405,21 +398,11 @@ def _ensure_directories(paths: dict[str, Any] | None = None) -> None:
         Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def _reset_output_workbook(input_wb: Any) -> None:
+def _reset_output_workbook(input_wb: Any = None) -> None:
     """Delete the previous ``<input stem>-output.xlsx`` so each successful run
-    starts from a clean workbook (closing it first if already open in the
-    Excel app, e.g. left over from a prior run)."""
+    starts from a clean workbook."""
 
     out_path = output_excel_path()
-    app = getattr(input_wb, "app", None)
-    if app is not None:
-        for book in list(app.books):
-            try:
-                if Path(book.fullname).resolve() == out_path.resolve():
-                    book.close()
-            except Exception:
-                continue
-
     if out_path.exists():
         try:
             out_path.unlink()
@@ -685,17 +668,14 @@ def _validate_wind_capacity(configured_capacity: object, derived_capacity: float
 
 
 def _safe_status_cell(wb):
-    try:
-        return wb.sheets["01_Control"]["H2"]
-    except Exception:
-        return wb.sheets[0]["H2"]
+    # Headless runs have no live Excel to surface progress in; status is logged
+    # instead (see the status() closures), so there is no status cell to write.
+    return None
 
 
 def _set_status(cell: Any, message: str) -> None:
-    try:
-        cell.value = message
-    except Exception:
-        pass
+    # No-op: progress is reported through logging in headless mode.
+    return None
 
 
 def _elapsed_since(started_at: float | None) -> str:
@@ -742,7 +722,4 @@ def _result_indicator(result: dict, metric: str, default: object = None) -> obje
 
 
 if __name__ == "__main__":
-    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-    if wb_path.exists():
-        xw.Book(str(wb_path)).set_mock_caller()
     main()

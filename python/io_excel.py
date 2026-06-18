@@ -27,7 +27,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd  # type: ignore
-import xlwings as xw  # type: ignore
+from openpyxl import Workbook, load_workbook  # type: ignore
+from openpyxl.drawing.image import Image as _XLImage  # type: ignore
+from openpyxl.styles import Font, PatternFill  # type: ignore
 
 from config import (
     MC_CONFIG_SHEET,
@@ -70,7 +72,7 @@ OPTIONAL_SHEETS = {
 }
 
 
-def read_inputs(wb: xw.Book) -> dict[str, Any]:
+def read_inputs(wb: Workbook) -> dict[str, Any]:
     """Read all v2 input tables from Excel into a single dictionary."""
     frames = {key: _read_sheet(wb, name) for key, name in SHEETS.items()}
     frames.update({key: _read_sheet_optional(wb, name) for key, name in OPTIONAL_SHEETS.items()})
@@ -81,7 +83,7 @@ def read_inputs(wb: xw.Book) -> dict[str, Any]:
 
 
 def read_inputs_with_mc(
-    wb: xw.Book,
+    wb: Workbook,
     scenario_id: int | None = None,
     uncertainty_scenarios: dict[int, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
@@ -149,7 +151,7 @@ def write_inc_files_mc(inputs: dict[str, Any], inc_dir: Path, out_dir: Path, sce
         log.info("Wrote include files for scenario %s in %s", scenario_id, inc_dir)
 
 
-def read_uncertainty_params(wb: xw.Book) -> dict[str, Any]:
+def read_uncertainty_params(wb: Workbook) -> dict[str, Any]:
     """Read run and MC parameters from workbook sheets with config defaults."""
 
     defaults = _get_default_mc_params()
@@ -181,14 +183,13 @@ def read_uncertainty_params(wb: xw.Book) -> dict[str, Any]:
     return params
 
 
-def _read_mc_params_from_sheet(wb: xw.Book, sheet_name: str) -> dict[str, Any]:
-    try:
-        sht = wb.sheets[sheet_name]
-    except KeyError:
+def _read_mc_params_from_sheet(wb: Workbook, sheet_name: str) -> dict[str, Any]:
+    if sheet_name not in wb.sheetnames:
         log.info("Sheet %r not found while reading run parameters", sheet_name)
         return {}
 
-    values = sht.used_range.options(ndim=2).value
+    ws = wb[sheet_name]
+    values = [list(row) for row in ws.iter_rows(values_only=True)]
     df = _parameter_table_from_values(values)
     if df.empty:
         log.warning("Sheet %r has no parameter/value table", sheet_name)
@@ -258,44 +259,50 @@ def _get_default_mc_params() -> dict[str, Any]:
     return copy.deepcopy(MC_DEFAULTS)
 
 
-def _read_sheet(wb: xw.Book, sheet_name: str) -> pd.DataFrame:
-    if sheet_name not in [s.name for s in wb.sheets]:
+def _read_sheet(wb: Workbook, sheet_name: str) -> pd.DataFrame:
+    if sheet_name not in wb.sheetnames:
         raise KeyError(f"Required sheet missing: {sheet_name}")
-    sht = wb.sheets[sheet_name]
-    region = sht.range("A1").expand()
-    df = _read_region_as_dataframe(region)
+    df = _read_region_as_dataframe(wb[sheet_name])
     df.columns = [_clean_col(c) for c in df.columns]
     df = df.dropna(how="all")
     return df
 
 
-def _read_region_as_dataframe(region: xw.Range) -> pd.DataFrame:
-    """Read an Excel table in chunks to avoid macOS Apple Event size limits."""
+def _read_region_as_dataframe(ws: Any) -> pd.DataFrame:
+    """Read the contiguous table anchored at A1, mirroring xlwings' ``range("A1").expand()``.
 
-    row_count = region.rows.count
-    col_count = region.columns.count
-    if row_count <= 0 or col_count <= 0:
+    The header is the first row up to the first empty cell; data rows follow
+    until a fully blank row (within the header's column span) ends the block.
+    This keeps the headless openpyxl reader equivalent to the old Excel-driven
+    one, which stopped at the first blank row/column.
+    """
+
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        header_row = next(rows_iter)
+    except StopIteration:
         return pd.DataFrame()
 
-    top = region.row
-    left = region.column
-    bottom = top + row_count - 1
-    right = left + col_count - 1
-    sheet = region.sheet
+    # Header width = contiguous non-empty leading cells (expand stops at a gap).
+    col_count = 0
+    for cell in header_row:
+        if cell is None or (isinstance(cell, str) and cell.strip() == ""):
+            break
+        col_count += 1
+    if col_count == 0:
+        return pd.DataFrame()
 
-    header_values = sheet.range((top, left), (top, right)).options(ndim=2).value
-    columns = _normalize_excel_row(header_values[0] if header_values else [], col_count)
-
-    if row_count == 1:
-        return pd.DataFrame(columns=columns)
+    columns = _normalize_excel_row(list(header_row), col_count)
 
     rows: list[list[Any]] = []
-    for start_row in range(top + 1, bottom + 1, EXCEL_READ_CHUNK_ROWS):
-        end_row = min(start_row + EXCEL_READ_CHUNK_ROWS - 1, bottom)
-        values = sheet.range((start_row, left), (end_row, right)).options(ndim=2).value
-        if values:
-            rows.extend(_normalize_excel_row(row, col_count) for row in values)
+    for raw in rows_iter:
+        cells = _normalize_excel_row(list(raw), col_count)
+        if all(c is None or (isinstance(c, str) and c.strip() == "") for c in cells):
+            break  # blank row terminates the contiguous block
+        rows.append(cells)
 
+    if not rows:
+        return pd.DataFrame(columns=columns)
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -303,7 +310,7 @@ def _normalize_excel_row(row: list[Any], width: int) -> list[Any]:
     return list(row[:width]) + [None] * max(0, width - len(row))
 
 
-def _read_sheet_optional(wb: xw.Book, sheet_name: str) -> pd.DataFrame:
+def _read_sheet_optional(wb: Workbook, sheet_name: str) -> pd.DataFrame:
     """Like `_read_sheet`, but returns an empty DataFrame if the sheet is absent."""
     try:
         return _read_sheet(wb, sheet_name)
@@ -552,7 +559,7 @@ def parse_csv_results(out_dir: Path, *_args) -> dict[str, Any]:
 
 
 def write_results(
-    wb: xw.Book,
+    wb: Workbook,
     results: dict[str, Any],
     rep_hours: pd.DataFrame | None = None,
     rep_days: pd.DataFrame | None = None,
@@ -770,7 +777,7 @@ def write_results(
 
 
 def write_mc_results_to_excel(
-    wb: xw.Book,
+    wb: Workbook,
     mc_results: dict[int, dict],
     requested_scenarios: int | None = None,
     sheet_suffix: str = "",
@@ -888,7 +895,7 @@ def write_mc_results_to_excel(
 
 
 def write_mc_charts_to_excel(
-    wb: xw.Book,
+    wb: Workbook,
     chart_paths: dict[str, Path],
     successful_scenarios: int,
     requested_scenarios: int,
@@ -897,20 +904,10 @@ def write_mc_charts_to_excel(
     """Place generated MC chart PNGs on a workbook dashboard sheet."""
 
     sheet_name = f"54_MC_Charts{sheet_suffix}"
-    if sheet_name not in [s.name for s in wb.sheets]:
-        wb.sheets.add(name=sheet_name, after=wb.sheets[-1])
-    sht = wb.sheets[sheet_name]
-    _delete_pictures(sht)
-    sht.clear()
+    sht = _ws_get_or_create(wb, sheet_name)
 
-    sht["A1"].value = "Monte Carlo Results Dashboard"
-    sht["A2"].value = f"Successful scenarios: {successful_scenarios} / {requested_scenarios}"
-    try:
-        sht["A1"].font.bold = True
-        sht["A1"].font.size = 16
-        sht["A2"].font.italic = True
-    except Exception:
-        pass
+    _set_cell(sht, "A1", "Monte Carlo Results Dashboard", bold=True, size=16)
+    _set_cell(sht, "A2", f"Successful scenarios: {successful_scenarios} / {requested_scenarios}", italic=True)
 
     existing = [(name, Path(path)) for name, path in chart_paths.items() if Path(path).exists()]
     row_stride = 38
@@ -918,24 +915,11 @@ def write_mc_charts_to_excel(
     for index, (name, img) in enumerate(existing):
         row = 4 + (index // len(col_positions)) * row_stride
         column = col_positions[index % len(col_positions)]
-        anchor = sht.range(f"{column}{row}")
-        sht.range((anchor.row - 1, anchor.column)).value = name.replace("_", " ").title()
+        _set_cell(sht, f"{column}{row - 1}", name.replace("_", " ").title())
         try:
-            sht.pictures.add(
-                str(img),
-                name=f"mc_chart_{index + 1}_{name}",
-                update=True,
-                left=anchor.left,
-                top=anchor.top,
-                width=640,
-            )
+            _add_image(sht, img, f"{column}{row}", width=640)
         except Exception as exc:
             log.warning("Could not insert %s into Excel: %s", img, exc)
-
-    try:
-        sht.autofit()
-    except Exception:
-        pass
 
 
 
@@ -1034,33 +1018,50 @@ def _read_csv_robust(path: Path) -> pd.DataFrame:
     return df
 
 
-def _write_df(wb: xw.Book, sheet_name: str, df: pd.DataFrame) -> None:
-    if sheet_name not in [s.name for s in wb.sheets]:
-        wb.sheets.add(name=sheet_name, after=wb.sheets[-1])
-    sht = wb.sheets[sheet_name]
-    sht.clear()
-    _write_dataframe_chunked(sht, df)
-    try:
-        sht.range("A1").expand("right").color = (31, 78, 121)
-        sht.range("A1").expand("right").font.color = (255, 255, 255)
-        sht.range("A1").expand("right").font.bold = True
-        sht.autofit()
-    except Exception:
-        pass
+_HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+_HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 
-def _write_dataframe_chunked(sht: xw.Sheet, df: pd.DataFrame) -> None:
-    """Write a DataFrame in row chunks to avoid macOS Apple Event size limits."""
+def _ws_get_or_create(wb: Workbook, sheet_name: str) -> Any:
+    """Return a fresh worksheet named ``sheet_name``, replacing any existing one.
 
-    columns = [str(col) for col in df.columns]
-    sht.range("A1").value = columns
-    if df.empty:
-        return
+    Excel limits sheet names to 31 characters; longer names are truncated so
+    the headless writer never raises on long suffixed names.
+    """
 
-    for start in range(0, len(df), EXCEL_WRITE_CHUNK_ROWS):
-        chunk = df.iloc[start : start + EXCEL_WRITE_CHUNK_ROWS]
-        values = _excel_safe_values(chunk)
-        sht.range((start + 2, 1)).value = values
+    name = sheet_name[:31]
+    if name in wb.sheetnames:
+        del wb[name]
+    return wb.create_sheet(title=name)
+
+
+def _set_cell(sht: Any, ref: str, value: Any, *, bold: bool = False, italic: bool = False, size: int | None = None) -> None:
+    cell = sht[ref]
+    cell.value = value
+    if bold or italic or size:
+        cell.font = Font(bold=bold, italic=italic, size=size or 11)
+
+
+def _add_image(sht: Any, path: Path, anchor: str, width: int = 620) -> None:
+    """Embed a PNG at ``anchor`` (e.g. "A4"), scaled to ``width`` px keeping aspect."""
+
+    img = _XLImage(str(path))
+    if getattr(img, "width", None):
+        ratio = float(width) / float(img.width)
+        img.height = int(img.height * ratio)
+        img.width = int(width)
+    sht.add_image(img, anchor)
+
+
+def _write_df(wb: Workbook, sheet_name: str, df: pd.DataFrame) -> None:
+    sht = _ws_get_or_create(wb, sheet_name)
+    sht.append([str(col) for col in df.columns])
+    if not df.empty:
+        for row in _excel_safe_values(df):
+            sht.append(row)
+    for cell in sht[1]:
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
 
 
 def _excel_safe_values(df: pd.DataFrame) -> list[list[Any]]:
@@ -1083,18 +1084,13 @@ def sort_openpyxl_sheets(workbook: Any) -> None:
 
 
 def sort_xlwings_sheets(wb: Any) -> None:
-    """Best-effort sort for an open xlwings workbook."""
+    """Sort an openpyxl workbook's sheets by numeric prefix, then name.
 
-    names = sorted([sheet.name for sheet in wb.sheets], key=sheet_sort_key)
-    for index, name in enumerate(names):
-        try:
-            sheet = wb.sheets[name]
-            if index == 0:
-                sheet.api.Move(Before=wb.sheets[0].api)
-            else:
-                sheet.api.Move(After=wb.sheets[index - 1].api)
-        except Exception:
-            return
+    Kept under the historical name so existing callers (write_results,
+    write_mc_results_to_excel, fna_charts, fna_cross_year) need no change.
+    """
+
+    sort_openpyxl_sheets(wb)
 
 
 def sheet_sort_key(name: str) -> tuple[int, str]:
@@ -1140,10 +1136,10 @@ def _indicator_value(result: dict[str, Any], metric: str, default: Any = None) -
     return default
 
 
-def _delete_pictures(sheet: xw.Sheet) -> None:
+def _delete_pictures(sheet: Any) -> None:
+    """Drop any embedded images from an openpyxl worksheet."""
     try:
-        for picture in list(sheet.pictures):
-            picture.delete()
+        sheet._images = []
     except Exception:
         pass
 

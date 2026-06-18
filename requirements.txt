@@ -2,12 +2,12 @@
 # Structured by usage category and sorted alphabetically within each section.
 
 # Core model runtime dependencies
-appscript==1.4.0             # AppleScript automation support
+# NOTE: the model is fully headless — Excel I/O goes through openpyxl, so no
+# Microsoft Excel install or xlwings/COM automation is needed (runs on Linux).
 et_xmlfile==2.0.0            # Excel XML writer dependency
 numpy==2.4.6                 # numeric arrays
-openpyxl==3.1.5              # Excel workbook read/write
+openpyxl==3.1.5              # headless Excel workbook read/write (replaces xlwings)
 pandas==3.0.3                # data manipulation
-xlwings==0.35.3              # workbook interaction during model runs
 
 # Command-line workflow (python -m fna_be ...)
 typer==0.15.1                 # CLI framework (fna_be.cli)

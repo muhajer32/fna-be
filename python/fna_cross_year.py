@@ -26,7 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import xlwings as xw  # type: ignore
+from openpyxl import Workbook  # type: ignore
 
 from io_excel import _delete_pictures, _indicator_value, _num, _write_df, sort_xlwings_sheets
 
@@ -210,7 +210,7 @@ def generate_trend_charts(year_metrics: dict[int, dict[str, float]], img_dir: Pa
 
 
 def write_cross_year_to_excel(
-    wb: xw.Book,
+    wb: Workbook,
     year_metrics: dict[int, dict[str, float]],
     img_dir: Path,
 ) -> pd.DataFrame:
@@ -223,46 +223,24 @@ def write_cross_year_to_excel(
 
     _write_df(wb, "60_CrossYear_Comparison", table)
 
-    chart_paths = generate_trend_charts(year_metrics, img_dir)
-    sheet_name = "61_CrossYear_Charts"
-    if sheet_name not in [s.name for s in wb.sheets]:
-        wb.sheets.add(name=sheet_name, after=wb.sheets[-1])
-    sht = wb.sheets[sheet_name]
-    _delete_pictures(sht)
-    sht.clear()
+    from io_excel import _add_image, _set_cell, _ws_get_or_create
 
-    sht["A1"].value = "Cross-Year FNA Trend Charts"
-    sht["A2"].value = f"Target years: {', '.join(str(y) for y in sorted(year_metrics))}"
-    try:
-        sht["A1"].font.bold = True
-        sht["A1"].font.size = 16
-        sht["A2"].font.italic = True
-    except Exception:
-        pass
+    chart_paths = generate_trend_charts(year_metrics, img_dir)
+    sht = _ws_get_or_create(wb, "61_CrossYear_Charts")
+
+    _set_cell(sht, "A1", "Cross-Year FNA Trend Charts", bold=True, size=16)
+    _set_cell(sht, "A2", f"Target years: {', '.join(str(y) for y in sorted(year_metrics))}", italic=True)
 
     row_stride = 22
     col_positions = ["A", "K"]
     for index, (title, img) in enumerate(chart_paths.items()):
         row = 4 + (index // len(col_positions)) * row_stride
         column = col_positions[index % len(col_positions)]
-        anchor = sht.range(f"{column}{row}")
-        sht.range((anchor.row - 1, anchor.column)).value = title
+        _set_cell(sht, f"{column}{row - 1}", title)
         try:
-            sht.pictures.add(
-                str(img),
-                name=f"cross_year_chart_{index + 1}",
-                update=True,
-                left=anchor.left,
-                top=anchor.top,
-                width=480,
-            )
+            _add_image(sht, img, f"{column}{row}", width=480)
         except Exception as exc:
             log.warning("Could not insert %s into Excel: %s", img, exc)
-
-    try:
-        sht.autofit()
-    except Exception:
-        pass
 
     sort_xlwings_sheets(wb)
     log.info("Wrote cross-year comparison (sheet 60) and %d trend charts (sheet 61)", len(chart_paths))

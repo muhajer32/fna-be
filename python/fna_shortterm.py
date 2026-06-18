@@ -650,7 +650,11 @@ def write_short_term_to_excel(
 
 def main() -> None:
     """CLI entry point: read raw history + GAMS outputs + workbook, write the report."""
-    import xlwings as xw
+    from openpyxl import load_workbook
+
+    from config import output_excel_path
+    from io_excel import _read_sheet
+    from main import _open_output_workbook
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -678,25 +682,21 @@ def main() -> None:
             }
 
     wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-    wb = xw.Book(str(wb_path))
-    try:
-        rep_hours = wb.sheets["02_RepHours"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        rep_hours.columns = [str(c).strip().lower() for c in rep_hours.columns]
-        res_portfolios = wb.sheets["07_RES_Portfolios"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        reserve_forecast_error = wb.sheets["12_Reserve_ForecastError"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        control_df = wb.sheets["01_Control"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        control = _control_dict(control_df)
+    in_wb = load_workbook(wb_path, read_only=True, data_only=True)
+    rep_hours = _read_sheet(in_wb, "02_RepHours")
+    res_portfolios = _read_sheet(in_wb, "07_RES_Portfolios")
+    reserve_forecast_error = _read_sheet(in_wb, "12_Reserve_ForecastError")
+    control = _control_dict(_read_sheet(in_wb, "01_Control"))
 
-        write_short_term_to_excel(
-            wb, residual, reserve, rep_hours, res_portfolios,
-            load_hist, res_actual_hist, res_forecast_hist,
-            reserve_forecast_error=reserve_forecast_error,
-            historical_res_capacity_mw=historical_res_capacity_mw,
-            control=control,
-        )
-        wb.save()
-    finally:
-        wb.close()
+    out_wb = _open_output_workbook()
+    write_short_term_to_excel(
+        out_wb, residual, reserve, rep_hours, res_portfolios,
+        load_hist, res_actual_hist, res_forecast_hist,
+        reserve_forecast_error=reserve_forecast_error,
+        historical_res_capacity_mw=historical_res_capacity_mw,
+        control=control,
+    )
+    out_wb.save(output_excel_path())
 
 
 if __name__ == "__main__":

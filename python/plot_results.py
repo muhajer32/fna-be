@@ -758,31 +758,23 @@ def _plot_sankey(data, path):
 # Excel integration (updated positions)
 # ------------------------------------------------------------------------------
 def write_charts_sheet(wb: Any, data: dict[str, pd.DataFrame], chart_paths: dict[str, Path]) -> None:
-    sheet_name = "40_Charts"
-    if sheet_name not in [s.name for s in wb.sheets]:
-        wb.sheets.add(sheet_name)
-    sht = wb.sheets[sheet_name]
-    sht.clear()
-    sht["A1"].value = "Belgium FNA-ED/UC v2 Output Dashboard"
-    sht["A2"].value = "Charts are generated from GAMS CSV outputs. Values update after each model run."
-    try:
-        sht["A1"].font.bold = True
-        sht["A1"].font.size = 16
-        sht["A2"].font.italic = True
-    except Exception:
-        pass
+    from io_excel import _add_image, _set_cell, _ws_get_or_create
+
+    sht = _ws_get_or_create(wb, "40_Charts")
+    _set_cell(sht, "A1", "Belgium FNA-ED/UC v2 Output Dashboard", bold=True, size=16)
+    _set_cell(sht, "A2", "Charts are generated from GAMS CSV outputs. Values update after each model run.", italic=True)
 
     indicators = data.get("indicators")
-    if indicators is not None:
-        sht["A4"].value = "FNA indicator summary"
-        sht["A5"].options(pd.DataFrame, header=True, index=False).value = indicators
-        try:
-            sht.range("A4").font.bold = True
-            sht.range("A5").expand("right").color = (31, 78, 121)
-            sht.range("A5").expand("right").font.color = (255, 255, 255)
-            sht.range("A5").expand("right").font.bold = True
-        except Exception:
-            pass
+    if indicators is not None and not indicators.empty:
+        _set_cell(sht, "A4", "FNA indicator summary", bold=True)
+        # Header + rows starting at A5.
+        sht["A5"] = None
+        for col_index, col in enumerate(indicators.columns):
+            sht.cell(row=5, column=1 + col_index, value=str(col))
+        safe = indicators.astype(object).where(pd.notna(indicators), None)
+        for row_index, record in enumerate(safe.values.tolist()):
+            for col_index, value in enumerate(record):
+                sht.cell(row=6 + row_index, column=1 + col_index, value=value)
 
     positions = {
         "generation_mix": "H4",
@@ -797,12 +789,8 @@ def write_charts_sheet(wb: Any, data: dict[str, pd.DataFrame], chart_paths: dict
         "stacked_dispatch_price": "H116",
     }
     for name, img in chart_paths.items():
-        if img.exists():
+        if img.exists() and name in positions:
             try:
-                sht.pictures.add(str(img), name=f"v2_{name}", update=True, left=sht.range(positions[name]).left, top=sht.range(positions[name]).top, width=620)
+                _add_image(sht, img, positions[name], width=620)
             except Exception as exc:
                 log.warning("Could not insert %s into Excel: %s", img, exc)
-    try:
-        sht.autofit()
-    except Exception:
-        pass

@@ -547,7 +547,11 @@ def write_ramping_to_excel(
 
 def main() -> None:
     """CLI entry point: read the latest GAMS outputs + workbook, write the report."""
-    import xlwings as xw
+    from openpyxl import load_workbook
+
+    from config import output_excel_path
+    from io_excel import _read_sheet
+    from main import _open_output_workbook
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -557,36 +561,32 @@ def main() -> None:
     dispatch = _read_csv_robust(out_dir / "dispatch.csv")
 
     wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
-    wb = xw.Book(str(wb_path))
-    try:
-        rep_hours = wb.sheets["02_RepHours"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        rep_hours.columns = [str(c).strip().lower() for c in rep_hours.columns]
-        borders = wb.sheets["04_Interconnectors"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        border_profiles = wb.sheets["05_IntercoProfiles"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        control_df = wb.sheets["01_Control"].range("A1").expand().options(pd.DataFrame, header=True, index=False).value
-        control = _control_dict(control_df)
+    in_wb = load_workbook(wb_path, read_only=True, data_only=True)
+    rep_hours = _read_sheet(in_wb, "02_RepHours")
+    borders = _read_sheet(in_wb, "04_Interconnectors")
+    border_profiles = _read_sheet(in_wb, "05_IntercoProfiles")
+    control = _control_dict(_read_sheet(in_wb, "01_Control"))
 
-        mc_results: dict[int, dict[str, pd.DataFrame]] = {}
-        for scenario_dir in sorted(out_dir.glob("scenario_*")):
-            disp_path = scenario_dir / "dispatch.csv"
-            res_path = scenario_dir / "residual.csv"
-            rsv_path = scenario_dir / "reserve.csv"
-            if disp_path.exists() and res_path.exists() and rsv_path.exists():
-                idx = int(scenario_dir.name.split("_")[-1])
-                mc_results[idx] = {
-                    "dispatch": _read_csv_robust(disp_path),
-                    "residual": _read_csv_robust(res_path),
-                    "reserve": _read_csv_robust(rsv_path),
-                }
+    mc_results: dict[int, dict[str, pd.DataFrame]] = {}
+    for scenario_dir in sorted(out_dir.glob("scenario_*")):
+        disp_path = scenario_dir / "dispatch.csv"
+        res_path = scenario_dir / "residual.csv"
+        rsv_path = scenario_dir / "reserve.csv"
+        if disp_path.exists() and res_path.exists() and rsv_path.exists():
+            idx = int(scenario_dir.name.split("_")[-1])
+            mc_results[idx] = {
+                "dispatch": _read_csv_robust(disp_path),
+                "residual": _read_csv_robust(res_path),
+                "reserve": _read_csv_robust(rsv_path),
+            }
 
-        write_ramping_to_excel(
-            wb, residual, reserve, dispatch, rep_hours,
-            borders=borders, border_profiles=border_profiles, control=control,
-            mc_results=mc_results or None,
-        )
-        wb.save()
-    finally:
-        wb.close()
+    out_wb = _open_output_workbook()
+    write_ramping_to_excel(
+        out_wb, residual, reserve, dispatch, rep_hours,
+        borders=borders, border_profiles=border_profiles, control=control,
+        mc_results=mc_results or None,
+    )
+    out_wb.save(output_excel_path())
 
 
 if __name__ == "__main__":
