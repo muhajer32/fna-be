@@ -8,7 +8,7 @@ handful of headline FNA indicators - RES curtailment, ramping needs,
 short-term needs, energy not served, total system cost and reserve
 shortfall - into one wide comparison table (one row per metric, one column
 per target year), writes it to ``60_CrossYear_Comparison``, and renders
-trend-line charts across years onto ``61_CrossYear_Charts``.
+trend-line charts across years onto ``54_Risk_MC_Charts``.
 
 Tidy-table convention note: unlike the per-year ACER sheets (long
 section/scope/key/metric/value format), this comparison is naturally a
@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from openpyxl import Workbook  # type: ignore
 
-from fna_be.io.excel import _delete_pictures, _indicator_value, _num, _write_df, sort_xlwings_sheets
+from fna.io.excel import _delete_pictures, _indicator_value, _num, _write_df, sort_xlwings_sheets
 
 log = logging.getLogger(__name__)
 
@@ -223,18 +223,26 @@ def write_cross_year_to_excel(
 
     _write_df(wb, "60_CrossYear_Comparison", table)
 
-    from fna_be.io.excel import _add_image, _set_cell, _ws_get_or_create
+    from fna.io.excel import RISK_CHART_SHEET, _add_image, _set_cell, _ws_get_existing_or_create
 
     chart_paths = generate_trend_charts(year_metrics, img_dir)
-    sht = _ws_get_or_create(wb, "61_CrossYear_Charts")
+    legacy_prefix = "61_CrossYear_Charts"[:24]
+    for sheet_name in list(wb.sheetnames):
+        if sheet_name.startswith(legacy_prefix):
+            del wb[sheet_name]
+    sht = _ws_get_existing_or_create(wb, RISK_CHART_SHEET)
 
-    _set_cell(sht, "A1", "Cross-Year FNA Trend Charts", bold=True, size=16)
-    _set_cell(sht, "A2", f"Target years: {', '.join(str(y) for y in sorted(year_metrics))}", italic=True)
+    if not sht["A1"].value:
+        _set_cell(sht, "A1", "Monte Carlo And Cross-Year Risk Charts", bold=True, size=16)
+    existing_images = len(getattr(sht, "_images", []) or [])
+    start_row = 4 if existing_images == 0 else 5 + ((existing_images + 1) // 2) * 38 + 4
+    _set_cell(sht, f"A{start_row}", "Cross-Year FNA Trend Charts", bold=True, size=14)
+    _set_cell(sht, f"A{start_row + 1}", f"Target years: {', '.join(str(y) for y in sorted(year_metrics))}", italic=True)
 
     row_stride = 22
     col_positions = ["A", "K"]
     for index, (title, img) in enumerate(chart_paths.items()):
-        row = 4 + (index // len(col_positions)) * row_stride
+        row = start_row + 3 + (index // len(col_positions)) * row_stride
         column = col_positions[index % len(col_positions)]
         _set_cell(sht, f"{column}{row - 1}", title)
         try:
@@ -243,5 +251,5 @@ def write_cross_year_to_excel(
             log.warning("Could not insert %s into Excel: %s", img, exc)
 
     sort_xlwings_sheets(wb)
-    log.info("Wrote cross-year comparison (sheet 60) and %d trend charts (sheet 61)", len(chart_paths))
+    log.info("Wrote cross-year comparison (sheet 60) and %d trend charts (%s)", len(chart_paths), RISK_CHART_SHEET)
     return table

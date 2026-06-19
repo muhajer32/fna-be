@@ -20,19 +20,22 @@ import pandas as pd
 from openpyxl import Workbook, load_workbook
 
 
-from fna_be.config import (
+from fna.config import (
     EXCEL_FILENAME,
     PATHS,
     PECD_COUNTRY_CODE,
+    PECD_DATA_DIR,
     PECD_YEARS,
     PROJECT_ROOT,
     WIND_RESOURCE_IDS,
     make_run_paths,
+    resolve_gms_path,
     output_excel_path,
+    resolve_input_workbook,
     runs_root,
-    update_latest_symlink,
+    csv_output_dir,
 )
-from fna_be.io.excel import (
+from fna.io.excel import (
     apply_uncertainty_scenario,
     parse_csv_results,
     read_inputs,
@@ -42,9 +45,9 @@ from fna_be.io.excel import (
     write_mc_results_to_excel,
     write_results,
 )
-from fna_be.model.monte_carlo import MonteCarloScenarios, PECDReader, RepresentativeHourMap
-from fna_be.plots.base import generate_all, generate_mc_summary_charts
-from fna_be.model.gams import run_model
+from fna.model.monte_carlo import MonteCarloScenarios, PECDReader, RepresentativeHourMap
+from fna.plots.base import generate_all, generate_mc_summary_charts
+from fna.model.gams import run_model
 
 log = logging.getLogger("main")
 
@@ -90,7 +93,7 @@ def begin_run(
     ``run_metadata.RunManifest``. Used by both ``main()`` and the CLI commands so
     every run lands in its own ``data/outputs/runs/<run_id>/`` folder."""
 
-    from fna_be.run_metadata import RunManifest, capture_environment, new_run_id
+    from fna.run_metadata import RunManifest, capture_environment, new_run_id
 
     target_year = (inputs or {}).get("target_year")
     stem = Path(input_filename or EXCEL_FILENAME).stem
@@ -113,20 +116,18 @@ def begin_run(
 
 def finish_run(manifest: Any, paths: dict[str, Any], out_wb: Any, status: str = "completed", error: str | None = None) -> None:
     """Finalise a run: stamp end time, write the metadata sheet(s) into the
-    output workbook, persist the JSON manifest + registry row, and update the
-    ``runs/latest`` pointer. Best-effort - never raises into the run."""
+    output workbook, and persist the JSON manifest + registry row. Best-effort
+    - never raises into the run."""
 
     if manifest is None:
         return
     try:
-        from fna_be.run_metadata import persist, write_metadata_sheets
+        from fna.run_metadata import persist, write_metadata_sheets
 
         manifest.mark_finished(status=status, error=error)
         if out_wb is not None:
             write_metadata_sheets(out_wb, manifest)
         persist(manifest, runs_root())
-        if paths and paths.get("run_dir"):
-            update_latest_symlink(Path(paths["run_dir"]))
     except Exception as exc:
         log.warning("Could not finalise run manifest: %s", exc)
 
@@ -189,6 +190,7 @@ def run_optimisation(
     owns_run = paths is None
     if owns_run:
         paths, manifest = begin_run("deterministic", inputs)
+    paths["gms_file"] = resolve_gms_path(inputs.get("control"))
     out_wb = _open_output_workbook(out_path=_output_path(paths))
     status_cell = _safe_status_cell(wb)
 
@@ -323,7 +325,7 @@ def _collect_indicator_tables(
     control = inputs.get("control") or {}
 
     try:
-        from fna_be.io.indicators.core import build_fna_indicators
+        from fna.io.indicators.core import build_fna_indicators
 
         tables.update(build_fna_indicators(
             results["residual"], frames.get("hours"), frames.get("days"),
@@ -336,7 +338,7 @@ def _collect_indicator_tables(
         log.warning("Could not build per-need FNA indicator tables: %s", exc)
 
     try:
-        from fna_be.io.indicators.network import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
+        from fna.io.indicators.network import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
 
         tables["dso_needs"] = compute_dso_needs(results["residual"], frames.get("hours"), frames.get("dso_zones"))
         network_csv = results.get("network")
@@ -395,6 +397,7 @@ def run_monte_carlo(
 
         if owns_run:
             paths, manifest = begin_run("monte_carlo", inputs_base, mc_params=mc_params, n_scenarios=n_scenarios)
+        paths["gms_file"] = resolve_gms_path(inputs_base.get("control"))
         out_wb = _open_output_workbook(out_path=_output_path(paths))
         _ensure_directories(paths)
 
@@ -471,7 +474,7 @@ def run_single_scenario(
     dict carries compute timing (``started_at``/``ended_at``/``wall_seconds`` and
     the GAMS solve time) so the parent can record it on the run manifest."""
 
-    from fna_be.run_metadata import _iso, _now
+    from fna.run_metadata import _iso, _now
 
     t0 = time.perf_counter()
     started_dt = _now()
@@ -527,7 +530,7 @@ def _open_workbook():
     FNA workbooks contain plain values (no live formulas) so this is exact.
     """
 
-    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
+    wb_path = resolve_input_workbook(EXCEL_FILENAME)
     return load_workbook(wb_path, read_only=True, data_only=True)
 
 
@@ -537,7 +540,7 @@ def _open_output_workbook(input_wb: Any = None, out_path: Path | None = None):
     update it in place); otherwise starts a clean, empty workbook.
 
     ``out_path`` selects the workbook location; when omitted it falls back to the
-    legacy ``excel/<stem>-output.xlsx`` (used by the standalone fna_* helpers).
+    legacy ``data/outputs/<stem>-output.xlsx`` (used by the standalone fna_* helpers).
     Run-isolated calls pass the per-run path so each run writes its own workbook.
     """
 
@@ -579,12 +582,23 @@ def _clean_generated_outputs(paths: dict[str, Any] | None = None) -> None:
         for path in root.glob("scenario_*"):
             if path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)
+        scenarios_root = root / "scenarios"
+        if scenarios_root.exists():
+            shutil.rmtree(scenarios_root, ignore_errors=True)
 
     img_dir = Path(paths["img_dir"])
     if img_dir.exists():
         for image in img_dir.glob("*.png"):
             try:
                 image.unlink()
+            except OSError:
+                pass
+
+    csv_dir = csv_output_dir(Path(paths["out_dir"]))
+    if csv_dir.exists():
+        for csv_path in csv_dir.glob("*.csv"):
+            try:
+                csv_path.unlink()
             except OSError:
                 pass
 
@@ -605,7 +619,7 @@ def _generate_pecd_scenarios(
     wind_portfolios: pd.DataFrame,
     common_years: list[int],
 ) -> dict[int, pd.DataFrame]:
-    pecd_dir = _project_path(mc_params.get("pecd_data_dir") or PROJECT_ROOT / "data" / "pecd")
+    pecd_dir = _resolve_pecd_dir(mc_params)
     reader = PECDReader(pecd_dir)
     target_year = int(mc_params["pecd_target_year"])
 
@@ -621,7 +635,7 @@ def _load_pecd_load_solar(
     mc_params: dict,
     inputs_base: dict,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[int]]:
-    pecd_dir = _project_path(mc_params.get("pecd_data_dir") or PROJECT_ROOT / "data" / "pecd")
+    pecd_dir = _resolve_pecd_dir(mc_params)
     reader = PECDReader(pecd_dir)
     requested_years = PECD_YEARS or None
     target_year = int(mc_params.get("pecd_target_year") or inputs_base["target_year"])
@@ -660,6 +674,18 @@ def _project_path(path_value: object) -> Path:
     return PROJECT_ROOT / path
 
 
+def _resolve_pecd_dir(mc_params: dict) -> Path:
+    configured = mc_params.get("pecd_data_dir")
+    path = _project_path(configured) if configured else Path(PECD_DATA_DIR)
+    if path.exists():
+        return path
+    default = Path(PECD_DATA_DIR)
+    if default.exists():
+        log.warning("Configured PECD data directory %s does not exist; using %s", path, default)
+        return default
+    return path
+
+
 def _run_scenarios(
     n_scenarios: int,
     max_workers: int,
@@ -670,9 +696,10 @@ def _run_scenarios(
 ) -> dict[int, dict]:
     paths = paths or PATHS
     scenario_dirs = {}
+    scenarios_root = Path(paths.get("run_dir") or paths["out_dir"]) / "scenarios"
     for scenario_id in range(n_scenarios):
-        inc_dir = Path(paths["inc_dir"]) / f"scenario_{scenario_id}"
-        out_dir = Path(paths["out_dir"]) / f"scenario_{scenario_id}"
+        out_dir = scenarios_root / f"scenario_{scenario_id}"
+        inc_dir = out_dir / "inc"
         scenario_dirs[scenario_id] = (inc_dir, out_dir)
 
     paths_dict = {key: str(value) for key, value in paths.items()}
@@ -714,7 +741,7 @@ def _record_scenario_timing(manifest: Any, result: dict[str, Any]) -> None:
     if manifest is None:
         return
     try:
-        from fna_be.run_metadata import ScenarioTiming
+        from fna.run_metadata import ScenarioTiming
 
         manifest.add_scenario(ScenarioTiming(
             scenario_id=int(result["scenario_id"]),

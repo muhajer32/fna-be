@@ -17,9 +17,9 @@ this repository.
    - `PECD-2021.3-country-Offshore-2030.parquet`
    - `PECD-country-demand_national_estimates-2030.parquet`
 
-4. Set `PECD_DATA_DIR=./data/pecd` in your `.env` file (or leave it at the
+4. Set `PECD_DATA_DIR=./data/inputs/pecd` in your `.env` file (or leave it at the
    default — it already points here).
 
-> The Monte Carlo workflow (`python -m fna_be run-monte-carlo`) reads these
+> The Monte Carlo workflow (`python -m fna run-monte-carlo`) reads these
 > files to draw climate-year samples. The deterministic workflow does not
 > require them.

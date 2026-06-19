@@ -27,7 +27,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill
 
 
-from fna_be.config import PROJECT_ROOT, EXCEL_FILENAME  # noqa: E402
+from fna.config import EXCEL_FILENAME, resolve_input_workbook  # noqa: E402
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -151,21 +151,52 @@ def add_barriers_digitalisation(wb: openpyxl.Workbook) -> None:
 
 
 def add_control_param(wb: openpyxl.Workbook) -> None:
+    """Add the v3.1 run-control parameters to 01_Control (idempotent).
+
+    Includes the market-time-unit, the selectable GAMS model file, and the
+    GAMS solver controls (optcr/optca/reslim/iterlim/limrow/limcol/threads) so
+    they can be changed per run without editing code or the .gms."""
+
     ws = wb["01_Control"]
     header = _header_row(ws)
     param_col = header.index("parameter") + 1
-    for row in range(2, ws.max_row + 1):
-        if ws.cell(row=row, column=param_col).value == "market_time_unit_minutes":
-            print("01_Control: market_time_unit_minutes already present, skipping")
-            return
+    existing = {
+        ws.cell(row=row, column=param_col).value
+        for row in range(2, ws.max_row + 1)
+    }
 
-    next_row = ws.max_row + 1
-    values = ["market_time_unit_minutes", 60, "minutes",
-              "ACER market time unit used to translate ramping MW/h stats into "
-              "MW-per-MTU (sheet 41b_FNA_Ramping_Capacity)", "model design", "S1"]
-    for col, value in enumerate(values, start=1):
-        ws.cell(row=next_row, column=col, value=value)
-    print("01_Control: added market_time_unit_minutes = 60")
+    # (parameter, value, unit, description, data_quality, source_id)
+    new_rows = [
+        ("market_time_unit_minutes", 60, "minutes",
+         "ACER market time unit; translates ramping MW/h into MW-per-MTU (sheet 41b)", "model design", "S1"),
+        ("gams_model_file", "uc_ed_model_v3.gms", "filename",
+         "GAMS model file under gams/ to solve (swap to run a variant model)", "model design", "S1"),
+        ("gams_optcr", 0.1, "fraction",
+         "GAMS relative MIP gap (optcr); 0.10 = stop at 10% gap. Tighten (~0.01) for final costs", "model design", "S1"),
+        ("gams_optca", 0, "abs",
+         "GAMS absolute MIP gap (optca); 0 = use relative gap only", "model design", "S1"),
+        ("gams_reslim", 1200, "seconds",
+         "GAMS solver time limit per solve (reslim)", "model design", "S1"),
+        ("gams_iterlim", 2000000000, "count",
+         "GAMS iteration limit (iterlim)", "model design", "S1"),
+        ("gams_limrow", 4, "count",
+         "GAMS equation listing rows (limrow); 0 = none", "model design", "S1"),
+        ("gams_limcol", 4, "count",
+         "GAMS variable listing columns (limcol); 0 = none", "model design", "S1"),
+        ("gams_threads", 0, "count",
+         "CPLEX threads (threads); 0 = use all available cores", "model design", "S1"),
+    ]
+
+    added = []
+    for values in new_rows:
+        if values[0] in existing:
+            continue
+        next_row = ws.max_row + 1
+        for col, value in enumerate(values, start=1):
+            ws.cell(row=next_row, column=col, value=value)
+        added.append(values[0])
+    print(f"01_Control: added {len(added)} control params: {added}" if added
+          else "01_Control: v3.1 control params already present, skipping")
 
 
 def sheet_sort_key(name: str) -> tuple[int, str]:
@@ -177,7 +208,7 @@ def sheet_sort_key(name: str) -> tuple[int, str]:
 
 
 def main() -> None:
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else PROJECT_ROOT / "excel" / EXCEL_FILENAME
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else resolve_input_workbook(EXCEL_FILENAME)
     lock_file = path.with_name(f"~${path.name}")
     if lock_file.exists():
         raise SystemExit(f"Workbook appears open in Excel ({lock_file}). Close it and retry.")

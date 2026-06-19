@@ -16,7 +16,8 @@ Charts created (v2)
 9. Sankey diagram of annual energy flows (weighted)
 10. Stacked hourly dispatch with flexibility activation + price curve (twin‑axis)
 
-All charts are saved as PNG and placed into the Excel sheet `40_Charts`.
+All charts are saved as PNG and placed into the consolidated Excel sheet
+`40_Deterministic_Charts`.
 """
 from __future__ import annotations
 import logging
@@ -230,7 +231,7 @@ def generate_mc_summary_charts(
     )
 
     try:
-        from fna_be.plots.mc_charts import generate_extra_mc_charts
+        from fna.plots.mc_charts import generate_extra_mc_charts
 
         price_df = pd.concat(price_rows, ignore_index=True) if price_rows else pd.DataFrame()
         extra_charts = generate_extra_mc_charts(mc_results, uncertainty_scenarios, price_df, img_dir)
@@ -758,35 +759,37 @@ def _plot_sankey(data, path):
 # Excel integration (updated positions)
 # ------------------------------------------------------------------------------
 def write_charts_sheet(wb: Any, data: dict[str, pd.DataFrame], chart_paths: dict[str, Path]) -> None:
-    from fna_be.io.excel import _add_image, _set_cell, _ws_get_or_create
+    from fna.io.excel import DETERMINISTIC_CHART_SHEET, _add_image, _set_cell, _ws_get_existing_or_create
 
-    sht = _ws_get_or_create(wb, "40_Charts")
-    _set_cell(sht, "A1", "Belgium FNA-ED/UC v2 Output Dashboard", bold=True, size=16)
-    _set_cell(sht, "A2", "Charts are generated from GAMS CSV outputs. Values update after each model run.", italic=True)
+    sht = _ws_get_existing_or_create(wb, DETERMINISTIC_CHART_SHEET)
+    if not sht["A1"].value:
+        _set_cell(sht, "A1", "Deterministic And FNA Indicator Charts", bold=True, size=16)
+    _set_cell(sht, "A78", "Dispatch, Price, Reserve And Commitment Charts", bold=True, size=14)
+    _set_cell(sht, "A79", "Charts are generated from GAMS CSV outputs. Values update after each model run.", italic=True)
 
     indicators = data.get("indicators")
     if indicators is not None and not indicators.empty:
-        _set_cell(sht, "A4", "FNA indicator summary", bold=True)
-        # Header + rows starting at A5.
-        sht["A5"] = None
+        _set_cell(sht, "A81", "FNA indicator summary", bold=True)
+        # Header + rows starting at A82.
+        sht["A82"] = None
         for col_index, col in enumerate(indicators.columns):
-            sht.cell(row=5, column=1 + col_index, value=str(col))
+            sht.cell(row=82, column=1 + col_index, value=str(col))
         safe = indicators.astype(object).where(pd.notna(indicators), None)
         for row_index, record in enumerate(safe.values.tolist()):
             for col_index, value in enumerate(record):
-                sht.cell(row=6 + row_index, column=1 + col_index, value=value)
+                sht.cell(row=83 + row_index, column=1 + col_index, value=value)
 
     positions = {
-        "generation_mix": "H4",
-        "price_curve": "H26",
-        "rldc": "H48",
-        "flex_needs": "A28",
-        "reserve_margin": "A50",
-        "storage_soc": "A72",
-        "ramp_matrix": "H70",
-        "gantt": "A94",
-        "sankey": "H94",
-        "stacked_dispatch_price": "H116",
+        "generation_mix": "H82",
+        "price_curve": "H104",
+        "rldc": "H126",
+        "flex_needs": "A106",
+        "reserve_margin": "A128",
+        "storage_soc": "A150",
+        "ramp_matrix": "H148",
+        "gantt": "A172",
+        "sankey": "H172",
+        "stacked_dispatch_price": "H194",
     }
     for name, img in chart_paths.items():
         if img.exists() and name in positions:

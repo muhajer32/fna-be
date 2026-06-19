@@ -9,11 +9,10 @@
 #
 # Run (deterministic), mounting your data and your licensed GAMS install:
 #   docker run --rm \
-#     -v "$PWD/excel:/app/excel" \
 #     -v "$PWD/data:/app/data" \
 #     -v "/opt/gams:/opt/gams:ro" \
 #     -e GAMS_EXE=/opt/gams/gams \
-#     fna run-deterministic --target-year 2030
+#     fna run -y 2030
 #
 # audit / validate / make-report need no GAMS and run as-is.
 
@@ -35,7 +34,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Project source.
 COPY python/ ./python/
 COPY gams/ ./gams/
-COPY excel/ ./excel/
 COPY data/ ./data/
 
 # Make GAMS discoverable when mounted at /opt/gams (override with -e GAMS_EXE=...).
@@ -43,6 +41,6 @@ ENV GAMS_EXE=/opt/gams/gams \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/python
 
-# `fna_be` is the CLI package (python -m fna_be <command>).
-ENTRYPOINT ["python", "-m", "fna_be"]
+# `fna` is the CLI package (python -m fna <command>).
+ENTRYPOINT ["python", "-m", "fna"]
 CMD ["--help"]

@@ -1,8 +1,8 @@
 """
 run_gams.py - Belgium FNA-ED/UC v2
 ===================================
-Runs GAMS 25.1 using subprocess, moves CSV outputs to data/outputs,
-and returns parsed results.
+Runs GAMS 25.1 using subprocess, writes CSV outputs under each run's
+``csv/`` folder, and returns parsed results.
 """
 from __future__ import annotations
 import logging
@@ -13,19 +13,19 @@ import subprocess
 import time
 from pathlib import Path
 
-from fna_be.config import GAMS_EXE, GAMS_TIMEOUT, EXPECTED_CSV_OUTPUTS
+from fna.config import GAMS_EXE, GAMS_TIMEOUT, EXPECTED_CSV_OUTPUTS, csv_output_dir
 
 log = logging.getLogger(__name__)
 
 
 def run_model(inputs: dict, paths: dict) -> dict:
-    from fna_be.io.excel import write_inc_files, parse_csv_results
+    from fna.io.excel import write_inc_files, parse_csv_results
 
     gams_exe = _resolve_gams_exe()
     gms_file = Path(paths["gms_file"]).resolve()
     inc_dir = Path(paths["inc_dir"]).resolve()
     out_dir = Path(paths["out_dir"]).resolve()
-    work_dir = out_dir / "_gams_work"
+    csv_dir = csv_output_dir(out_dir).resolve()
     log_file = Path(paths.get("log_file") or (out_dir / "gams_run.log")).resolve()
     if log_file == Path(paths["log_file"]).resolve() and out_dir.name.startswith("scenario_"):
         log_file = out_dir / "gams_run.log"
@@ -35,14 +35,14 @@ def run_model(inputs: dict, paths: dict) -> dict:
     if not gms_file.exists():
         raise RuntimeError(f"GAMS model not found: {gms_file}")
 
-    for folder in [inc_dir, out_dir, work_dir, log_file.parent]:
+    for folder in [inc_dir, out_dir, csv_dir, log_file.parent]:
         folder.mkdir(parents=True, exist_ok=True)
 
     for p in [log_file, lst_file]:
         _delete(p)
     for name in EXPECTED_CSV_OUTPUTS:
+        _delete(csv_dir / name)
         _delete(out_dir / name)
-        _delete(work_dir / name)
 
     write_inc_files(inputs, inc_dir, out_dir)
 
@@ -57,7 +57,7 @@ def run_model(inputs: dict, paths: dict) -> dict:
     ]
     log.info("Running GAMS: %s", " ".join(cmd))
     _gams_t0 = time.perf_counter()
-    proc = subprocess.run(cmd, cwd=str(work_dir), capture_output=True, text=True, timeout=GAMS_TIMEOUT, env=os.environ.copy())
+    proc = subprocess.run(cmd, cwd=str(csv_dir), capture_output=True, text=True, timeout=GAMS_TIMEOUT, env=os.environ.copy())
     gams_wall_seconds = round(time.perf_counter() - _gams_t0, 3)
     log.info("GAMS return code: %s (wall %.1fs)", proc.returncode, gams_wall_seconds)
     if proc.stdout.strip():
@@ -68,25 +68,17 @@ def run_model(inputs: dict, paths: dict) -> dict:
         _dump_listing(lst_file)
         raise RuntimeError(f"GAMS failed with code {proc.returncode}. Listing: {lst_file}")
 
-    moved = []
-    for name in EXPECTED_CSV_OUTPUTS:
-        src = work_dir / name
-        dst = out_dir / name
-        if src.exists():
-            shutil.move(str(src), str(dst))
-            moved.append(name)
-
-    missing = [n for n in EXPECTED_CSV_OUTPUTS if not (out_dir / n).exists()]
+    missing = [n for n in EXPECTED_CSV_OUTPUTS if not (csv_dir / n).exists()]
     if missing:
         _dump_listing(lst_file)
-        raise RuntimeError(f"GAMS solved but missing CSV outputs: {missing}. Moved: {moved}")
+        raise RuntimeError(f"GAMS solved but missing CSV outputs under {csv_dir}: {missing}")
 
     results = parse_csv_results(out_dir)
     results["_gams_timing"] = {
         "gams_wall_seconds": gams_wall_seconds,
         "gams_resource_seconds": _parse_resource_seconds(lst_file),
     }
-    log.info("Parsed v2 result CSV files from %s", out_dir)
+    log.info("Parsed v2 result CSV files from %s", csv_dir)
     return results
 
 

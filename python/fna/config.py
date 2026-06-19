@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-# config.py lives at python/fna_be/config.py, so the repo root is three levels up.
+# config.py lives at python/fna/config.py, so the repo root is three levels up.
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
 
 def _load_local_env(path: Path) -> None:
@@ -80,7 +80,7 @@ def _env_list(name: str) -> list[str] | None:
 
 # Main workbook used by both the representative-day refresh and model runs.
 #EXCEL_FILENAME: str = os.environ.get("EXCEL_FILENAME", "Belgium_FNA_ED_v2_input_data.xlsx")
-EXCEL_FILENAME: str = os.environ.get("EXCEL_FILENAME", "Belgium_FNA_v3.1_FullYear2023_input_data.xlsx")
+EXCEL_FILENAME: str = os.environ.get("EXCEL_FILENAME", "BE_FullYear2023.xlsx")
 
 
 # Workbook input sheets read by the deterministic model.
@@ -114,18 +114,47 @@ OPTIONAL_INPUT_SHEETS: list[str] = [
 # Paths
 # ============================================================================
 
+DATA_DIR: Path = PROJECT_ROOT / "data"
+INPUTS_DIR: Path = DATA_DIR / "inputs"
+OUTPUTS_DIR: Path = DATA_DIR / "outputs"
+EXCEL_DIR: Path = INPUTS_DIR / "excel"
+SAMPLE_DATA_DIR: Path = INPUTS_DIR / "sample"
+PECD_DATA_DIR: Path = INPUTS_DIR / "pecd"
+CSV_OUTPUT_DIR_NAME: str = "csv"
+
+
+def raw_data_dir(country: str, year: int) -> Path:
+    """Canonical cache directory for raw ENTSO-E country/year CSVs."""
+
+    return INPUTS_DIR / f"raw_{str(country).strip().lower()}{int(year)}"
+
+
+def csv_output_dir(run_dir: str | Path) -> Path:
+    """Folder containing GAMS CSV outputs for a run directory."""
+
+    return Path(run_dir) / CSV_OUTPUT_DIR_NAME
+
+
+def resolve_input_workbook(filename: str | Path | None = None) -> Path:
+    """Resolve an input workbook under ``data/inputs/excel`` unless absolute."""
+
+    name = filename or EXCEL_FILENAME
+    path = Path(name).expanduser()
+    return path if path.is_absolute() else EXCEL_DIR / path.name
+
+
 PATHS: dict[str, Path] = {
     "gms_file": PROJECT_ROOT / "gams" / "uc_ed_model_v3.gms",
-    "inc_dir": PROJECT_ROOT / "data" / "inputs",
-    "out_dir": PROJECT_ROOT / "data" / "outputs",
+    "inc_dir": INPUTS_DIR,
+    "out_dir": OUTPUTS_DIR,
     "log_file": PROJECT_ROOT / "logs" / "gams_run.log",
-    "img_dir": PROJECT_ROOT / "data" / "outputs" / "images",
+    "img_dir": OUTPUTS_DIR / "images",
 }
 
 
 def output_excel_path(input_filename: str | None = None) -> Path:
     """Path of the separate output workbook for ``input_filename`` (default
-    EXCEL_FILENAME): ``<input stem>-output.xlsx`` next to the input file.
+    EXCEL_FILENAME): ``data/outputs/<input stem>-output.xlsx``.
 
     All sheets written by main.py / multi_year.py (results, FNA indicators,
     charts, MC summaries, cross-year comparison) go into this workbook, kept
@@ -134,12 +163,27 @@ def output_excel_path(input_filename: str | None = None) -> Path:
     """
 
     stem = Path(input_filename or EXCEL_FILENAME).stem
-    return PROJECT_ROOT / "excel" / f"{stem}-output.xlsx"
+    return OUTPUTS_DIR / f"{stem}-output.xlsx"
+
+
+def resolve_gms_path(control: dict | None = None) -> Path:
+    """Resolve which GAMS model file to run.
+
+    Selectable per run via ``01_Control.gams_model_file`` (a bare filename
+    resolved under ``gams/``, or an absolute path). Falls back to the
+    ``GAMS_MODEL_FILE`` env var, then the default ``uc_ed_model_v3.gms``.
+    """
+
+    name = ((control or {}).get("gams_model_file")
+            or os.environ.get("GAMS_MODEL_FILE")
+            or "uc_ed_model_v3.gms")
+    p = Path(str(name).strip()).expanduser()
+    return p if p.is_absolute() else PROJECT_ROOT / "gams" / p.name
 
 
 def runs_root() -> Path:
     """Root folder under which every isolated run directory lives."""
-    return PROJECT_ROOT / "data" / "outputs" / "runs"
+    return OUTPUTS_DIR / "runs"
 
 
 def make_run_paths(
@@ -156,8 +200,7 @@ def make_run_paths(
 
     Returns the same keys as ``PATHS`` plus ``run_dir``, ``run_id`` and
     ``output_xlsx`` (the per-run output workbook path). Monte Carlo scenario
-    folders nest automatically as ``<run_dir>/scenario_<n>`` because
-    ``main._run_scenarios`` derives them from ``out_dir``.
+    folders nest under ``<run_dir>/scenarios/scenario_<n>/``.
     """
 
     return paths_from_run_dir(runs_root() / run_id, input_filename)
@@ -182,47 +225,19 @@ def paths_from_run_dir(run_dir: Path, input_filename: str | None = None) -> dict
     }
 
 
-def latest_run_dir() -> Path | None:
-    """Resolve the most recent run directory (the ``runs/latest`` pointer), or
-    None if no run has been recorded yet."""
+def most_recent_run_dir() -> Path | None:
+    """Resolve the newest concrete run directory under ``data/outputs/runs``."""
 
-    link = runs_root() / "latest"
-    try:
-        if link.is_symlink() or link.exists():
-            resolved = link.resolve()
-            if resolved.exists():
-                return resolved
-    except OSError:
-        pass
-    txt = runs_root() / "latest.txt"
-    if txt.exists():
-        candidate = Path(txt.read_text(encoding="utf-8").strip())
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def update_latest_symlink(run_dir: Path) -> None:
-    """Point ``data/outputs/runs/latest`` at the most recent run directory, so
-    'the last run' always has a stable path. Best-effort: on platforms/filesystems
-    without symlink support, write a ``latest.txt`` pointer file instead."""
-
-    link = runs_root() / "latest"
-    target = Path(run_dir)
-    try:
-        if link.is_symlink() or link.exists():
-            if link.is_symlink() or link.is_file():
-                link.unlink()
-            else:
-                # An unexpected real directory named 'latest'; leave it alone.
-                (runs_root() / "latest.txt").write_text(str(target), encoding="utf-8")
-                return
-        link.symlink_to(target, target_is_directory=True)
-    except OSError:
-        try:
-            (runs_root() / "latest.txt").write_text(str(target), encoding="utf-8")
-        except OSError:
-            pass
+    root = runs_root()
+    if not root.exists():
+        return None
+    candidates = [
+        path for path in root.iterdir()
+        if path.is_dir() and path.name != "index" and not path.name.startswith(".")
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path.stat().st_mtime, path.name))
 
 
 def paths_for_year(year: int) -> dict[str, Path]:
@@ -233,10 +248,10 @@ def paths_for_year(year: int) -> dict[str, Path]:
     without disturbing the single-year PATHS layout.
     """
 
-    out_dir = PROJECT_ROOT / "data" / "outputs" / f"year_{year}"
+    out_dir = OUTPUTS_DIR / f"year_{year}"
     return {
         "gms_file": PATHS["gms_file"],
-        "inc_dir": PROJECT_ROOT / "data" / "inputs" / f"year_{year}",
+        "inc_dir": INPUTS_DIR / f"year_{year}",
         "out_dir": out_dir,
         "log_file": PROJECT_ROOT / "logs" / f"run_{year}.log",
         "img_dir": out_dir / "images",
@@ -322,7 +337,7 @@ MC_DEFAULTS: dict[str, Any] = {
     "n_mc_scenarios": _env_int("N_MC_SCENARIOS", 100),
     "seed_random": _env_int("SEED_RANDOM"),
     "use_pecd_data": _env_bool("USE_PECD_DATA", True),
-    "pecd_data_dir": os.environ.get("PECD_DATA_DIR") or PROJECT_ROOT / "data" / "pecd",
+    "pecd_data_dir": os.environ.get("PECD_DATA_DIR") or PECD_DATA_DIR,
     "pecd_target_year": _env_int("PECD_TARGET_YEAR"),
     "wind_capacity_mw": _env_float("WIND_CAPACITY_MW"),
     "max_parallel_workers": _env_int("MAX_PARALLEL_WORKERS", 4),

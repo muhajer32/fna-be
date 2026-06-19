@@ -5,7 +5,7 @@ Builds a single Markdown summary report bundling the key ACER FNA indicator
 tables and chart images for a run, so results can be skimmed or shared
 without opening the output workbook.
 
-Used by the ``python -m fna_be make-report`` CLI command.
+Used by the ``python -m fna make-report`` CLI command.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 # Indicator CSVs expected under <out_dir>/fna_tables/, written by
-# fna_be.cli's compute-fna-indicators / make-report commands.
+# fna.cli's compute-fna-indicators / make-report commands.
 _INDICATOR_TABLES: dict[str, str] = {
     "res_integration": "RES Integration (Article 8)",
     "ramping": "Ramping Needs (Article 9)",

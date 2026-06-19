@@ -1,5 +1,5 @@
 """
-fna_be.logging_setup
+fna.logging_setup
 =====================
 One consistent logging setup for every CLI command: a per-command log file
 under ``logs/cli/<command>.log`` plus a concise console stream. Re-uses the

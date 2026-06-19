@@ -17,7 +17,7 @@ Two problems this module solves:
 
 The manifest is written three ways:
     - ``run_metadata.json`` inside the run folder (machine-readable, full detail);
-    - one row appended to ``data/outputs/runs/runs_index.csv`` (cross-run registry);
+    - one row appended to ``data/outputs/runs/index/runs_index.csv`` (cross-run registry);
     - a ``99_Run_Metadata`` sheet in the output workbook (human-readable).
 
 Nothing here imports GAMS or Excel at module load; heavy/optional probes
@@ -194,7 +194,7 @@ def gams_version(gams_exe: str | None = None) -> str | None:
     """Resolve the GAMS version string, best-effort. Returns None if GAMS is
     not installed/resolvable (e.g. audit/validate on a machine without GAMS)."""
     try:
-        from fna_be.config import GAMS_EXE  # local import: config has no heavy deps
+        from fna.config import GAMS_EXE  # local import: config has no heavy deps
 
         exe = gams_exe or GAMS_EXE
         out = subprocess.run([exe, "audit"], capture_output=True, text=True, timeout=15)
@@ -324,7 +324,9 @@ def append_to_index(runs_root: Path, manifest: RunManifest) -> Path:
 
     runs_root = Path(runs_root)
     runs_root.mkdir(parents=True, exist_ok=True)
-    index_path = runs_root / "runs_index.csv"
+    index_dir = runs_root / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    index_path = index_dir / "runs_index.csv"
 
     env = manifest.environment or {}
     row = {
@@ -420,7 +422,7 @@ def write_metadata_sheets(wb: Any, manifest: RunManifest, sheet_suffix: str = ""
     runs, ``99b_Scenario_Timings`` holds the per-scenario compute table.
     Safe no-op on any error - metadata must never break a results workbook."""
     try:
-        from fna_be.io.excel import _write_df
+        from fna.io.excel import _write_df
 
         _write_df(wb, f"99_Run_Metadata{sheet_suffix}", manifest_to_frame(manifest))
         scen = scenario_timing_frame(manifest)

@@ -20,21 +20,21 @@ __pycache__/
 # Logs
 logs/
 
-# Data: track ONLY sample data (+ the PECD download instructions).
+# Data: track ONLY sample data, the demo workbook, and PECD download instructions.
 # Everything else under data/ is generated, large, or restricted
-# (data/inputs, data/outputs/runs, data/raw_be2023, data/pecd payload, ...).
+# (data/inputs/raw_*, data/outputs/runs, PECD payload, ...).
 data/*
-!data/sample/
-!data/pecd/
-data/pecd/*
-!data/pecd/README.md
-
-# Excel: track ONLY the demo workbook. All other workbooks, lock files and
-# pulled VM run outputs are local/generated.
-excel/*.xlsx
-!excel/demo_input.xlsx
-excel/~$*
-excel/vmmc/
+!data/inputs/
+data/inputs/*
+!data/inputs/sample/
+!data/inputs/sample/**
+!data/inputs/pecd/
+data/inputs/pecd/*
+!data/inputs/pecd/README.md
+!data/inputs/excel/
+data/inputs/excel/*.xlsx
+!data/inputs/excel/demo_input.xlsx
+data/inputs/excel/~$*
 
 # Tooling / IDE
 .claude/

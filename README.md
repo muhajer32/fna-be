@@ -19,20 +19,21 @@ Open-source prototype of an **ACER Flexibility Needs Assessment** for the Belgia
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .              # installs the fna_be CLI package (editable)
+pip install -e .              # installs the fna CLI package (editable)
 cp .env.example .env          # fill in GAMS_EXE and ENTSOE_API_KEY
-python -m fna_be --help       # or: fna-be --help
+python -m fna --help       # or: fna --help
 ```
 
 ## CLI commands
 
 | Command | What it does |
 |---|---|
+| `fetch --country BE --year 2023` | Pull a country/year of hourly ENTSO-E data into `data/inputs/raw_<CC><year>/` (requires API key) |
+| `build-full-year --country BE --year 2023` | Build `BE_FullYear2023.xlsx` (8760 h) from fetched data + a `--template` |
+| `build-rep-days --country BE --year 2023 [--days N]` | Compress to `BE_RepDays2023.xlsx` (elbow-optimal day count if `--days` omitted) |
 | `audit` | Data quality report + ACER compliance check |
-| `refresh-data --country BE --year 2024` | Pull ENTSO-E data (requires API key) |
-| `build-rep-days --clusters 20` | K-means representative-day compression |
-| `run-deterministic --target-year 2030` | Single UC/ED run (requires GAMS) |
-| `run-monte-carlo --target-year 2030 --scenarios 200` | MC weather-uncertainty run |
+| `run -y 2030` | Single UC/ED run (requires GAMS); alias for `run-deterministic` |
+| `mc -y 2030 -n 200` | MC weather-uncertainty run; alias for `run-monte-carlo` |
 | `compute-fna-indicators` | Post-process indicators from existing results |
 | `fine-tune` | Article-14 network fine-tuning pass |
 | `validate` | Config + workbook + GAMS sanity checks |
@@ -49,13 +50,14 @@ data/outputs/runs/
   <run_id>/                         # run_id = <UTC timestamp>__<mode>__y<year>__<input stem>
     <input stem>-output.xlsx        # results workbook for THIS run
     run_metadata.json               # provenance + compute + timing (see below)
-    dispatch.csv  residual.csv  price.csv  reserve.csv  storage.csv  network.csv
+    csv/                            # GAMS CSV outputs: dispatch, residual, price, reserve, ...
     images/                         # all charts for this run
     inc/                            # exact GAMS include files used
     gams_run.log  gams_run.lst
-    scenario_0/ scenario_1/ ...     # per-scenario folders (Monte Carlo only)
-  latest -> <run_id>                # pointer to the most recent run
-  runs_index.csv                    # one row per run: mode, year, timing, host, status
+    scenarios/                      # Monte Carlo only
+      scenario_0/
+        inc/  csv/  gams_run.log  gams_run.lst
+  index/runs_index.csv              # one row per run: mode, year, timing, host, status
 ```
 
 - **`run_metadata.json`** and the **`99_Run_Metadata`** / **`99b_Scenario_Timings`**
@@ -65,15 +67,15 @@ data/outputs/runs/
   timestamps and wall-clock seconds for the whole run and each MC scenario,
   including GAMS solve time).
 - Post-process commands (`compute-fna-indicators`, `fine-tune`, `make-report`)
-  default to **`runs/latest`**; pass `--target-year <year>` to target a
+  default to the newest run folder; pass `--target-year <year>` to target a
   per-year folder instead.
 
 ## Requirements
 
 - Python 3.10+, dependencies in `requirements.txt`
 - **GAMS** (licensed) for optimisation runs — set `GAMS_EXE` in `.env`
-- **ENTSO-E API key** for `refresh-data` — set `ENTSOE_API_KEY` in `.env`
-- **PECD data** (not included — restricted redistribution): see `data/pecd/README.md`
+- **ENTSO-E API key** for `fetch`/Monte Carlo — set `ENTSOE_API_KEY` in `.env`
+- **PECD data** (not included — restricted redistribution): see `data/inputs/pecd/README.md`
 
 The model is **fully headless** — Excel I/O uses `openpyxl`, so no Microsoft
 Excel install (and no xlwings/COM automation) is required. It runs on Linux,
@@ -84,19 +86,19 @@ macOS, or Windows, and in containers / cloud VMs.
 ```bash
 docker build -t fna .
 # audit / validate need no GAMS:
-docker run --rm -v "$PWD/excel:/app/excel" -v "$PWD/data:/app/data" fna validate
+docker run --rm -v "$PWD/data:/app/data" fna validate
 # optimisation runs mount your licensed GAMS install:
 docker run --rm \
-  -v "$PWD/excel:/app/excel" -v "$PWD/data:/app/data" \
+  -v "$PWD/data:/app/data" \
   -v "/opt/gams:/opt/gams:ro" -e GAMS_EXE=/opt/gams/gams \
-  fna run-deterministic --target-year 2030
+  fna run -y 2030
 ```
 
 ## Repo layout
 
 ```
 gams/                       GAMS UC/ED optimisation core
-python/fna_be/              the fna_be package (4 pipeline stages):
+python/fna/              the fna package (4 pipeline stages):
   inputs/                     (1) data fetching + representative-day build
   io/  io/indicators/         (2) Excel<->GAMS bridge + ACER indicators
   model/                      (3) deterministic / Monte Carlo run + GAMS runner
@@ -104,9 +106,9 @@ python/fna_be/              the fna_be package (4 pipeline stages):
   config.py  run_metadata.py  shared: settings/paths + provenance capture
   cli.py                      command-line entry point
 scripts/pull_vm_results.sh  pull isolated runs back from a VM
-excel/demo_input.xlsx       demo workbook (~1 MB)
-data/sample/                14-day trimmed ENTSO-E CSVs
-data/pecd/README.md         PECD download instructions
+data/inputs/excel/demo_input.xlsx  demo workbook (~1 MB)
+data/inputs/sample/               14-day trimmed ENTSO-E CSVs
+data/inputs/pecd/README.md        PECD download instructions
 data/outputs/runs/          per-run isolated output folders (see USER_GUIDE §5)
 docs/
   USER_GUIDE.md             install, CLI, 01_Control reference, output structure, VM
@@ -121,10 +123,10 @@ docs/
 ### Upload files to the VM
 ```bash
 # From your Mac — upload an Excel workbook:
-scp ~/Downloads/Belgium_FNA_v3.1_FullYear2023_input_data.xlsx root@YOUR_IP:/root/fna/excel/
+scp ~/Downloads/Belgium_FNA_v3.1_FullYear2023_input_data.xlsx root@YOUR_IP:/root/fna/data/inputs/excel/
 
-# Or sync the whole excel/ folder:
-rsync -avz excel/ root@YOUR_IP:/root/fna/excel/
+# Or sync the whole input workbook folder:
+rsync -avz data/inputs/excel/ root@YOUR_IP:/root/fna/data/inputs/excel/
 ```
 
 ### Edit control values in Excel
@@ -149,19 +151,19 @@ cd /root/fna
 
 # Full-year run (16 CPUs):
 docker run --rm \
-  -v "$PWD/excel:/app/excel" -v "$PWD/data:/app/data" \
+  -v "$PWD/data:/app/data" \
   -v "/opt/gams:/opt/gams:ro" -e GAMS_EXE=/opt/gams/gams \
   -e MAX_PARALLEL_WORKERS=16 \
   -e EXCEL_FILENAME=FNA_FullYear.xlsx \
-  fna run-monte-carlo --target-year 2030 --scenarios 100
+  fna mc -y 2030 -n 100
 
 # Representative-day run (different input workbook, same command):
 docker run --rm \
-  -v "$PWD/excel:/app/excel" -v "$PWD/data:/app/data" \
+  -v "$PWD/data:/app/data" \
   -v "/opt/gams:/opt/gams:ro" -e GAMS_EXE=/opt/gams/gams \
   -e MAX_PARALLEL_WORKERS=16 \
   -e EXCEL_FILENAME=FNA_RepDays.xlsx \
-  fna run-monte-carlo --target-year 2030 --scenarios 100
+  fna mc -y 2030 -n 100
 ```
 
 Use `tmux` to keep runs alive after SSH disconnect:
@@ -181,11 +183,11 @@ runs back **without mixing them together**:
 ```bash
 # From your Mac (repo root):
 scripts/pull_vm_results.sh root@YOUR_IP            # pull ALL runs + registry
-scripts/pull_vm_results.sh root@YOUR_IP latest     # pull only the most recent run
+scripts/pull_vm_results.sh root@YOUR_IP all
 scripts/pull_vm_results.sh root@YOUR_IP <run_id>   # pull one specific run
 
 # Inspect what ran where, when, and for how long:
-column -s, -t data/outputs/runs/runs_index.csv | less -S
+column -s, -t data/outputs/runs/index/runs_index.csv | less -S
 ```
 
 Each pulled run carries its own `-output.xlsx`, charts, CSVs and

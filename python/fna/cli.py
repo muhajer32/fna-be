@@ -1,19 +1,19 @@
 """
-fna_be.cli
+fna.cli
 ==========
 Command-line entry point for the Belgium FNA-ED/UC v3 prototype.
 
 Each command is a thin wrapper over the package's stage modules:
-``fna_be.inputs`` (data fetching + rep-days), ``fna_be.io`` (Excel I/O +
-indicators), ``fna_be.model`` (deterministic / Monte Carlo run + GAMS) and
-``fna_be.plots`` (charts + report). Heavy modules (GAMS, matplotlib) are
-imported lazily inside each command so ``fna-be --help`` stays fast and
+``fna.inputs`` (data fetching + rep-days), ``fna.io`` (Excel I/O +
+indicators), ``fna.model`` (deterministic / Monte Carlo run + GAMS) and
+``fna.plots`` (charts + report). Heavy modules (GAMS, matplotlib) are
+imported lazily inside each command so ``fna --help`` stays fast and
 environment-variable overrides (e.g. ``--country`` / ``--year``) are picked up
-by ``fna_be.config`` before it is first imported.
+by ``fna.config`` before it is first imported.
 
-    fna-be --help                              # or:  python -m fna_be --help
-    fna-be audit
-    fna-be run-deterministic --target-year 2030
+    fna --help                              # or:  python -m fna --help
+    fna audit
+    fna run -y 2030
 """
 from __future__ import annotations
 
@@ -26,17 +26,38 @@ from typing import Optional
 
 import typer
 
-from fna_be.logging_setup import configure_logging
+from fna.logging_setup import configure_logging
 
 
 app = typer.Typer(
-    name="fna_be",
+    name="fna",
     help="Belgium Flexibility Needs Assessment (FNA) prototype - command-line workflow.",
     no_args_is_help=True,
     add_completion=False,
 )
 
-log = logging.getLogger("fna_be")
+log = logging.getLogger("fna")
+
+# A reusable --workbook/-w option; declared once and shared by every command.
+WorkbookOpt = typer.Option(
+    None, "--workbook", "-w",
+    help="Input workbook filename in data/inputs/excel/ (overrides the EXCEL_FILENAME default for this run).",
+)
+
+
+def _apply_workbook(workbook: Optional[str]) -> None:
+    """Select the input workbook for this run, before fna.config is imported.
+
+    Sets EXCEL_FILENAME so ``config`` (and everything reading it) picks up the
+    chosen workbook; also patches an already-imported config defensively. Pass
+    a bare filename that lives under ``data/inputs/excel/``."""
+
+    if not workbook:
+        return
+    name = Path(workbook).name
+    os.environ["EXCEL_FILENAME"] = name
+    if "fna.config" in sys.modules:
+        sys.modules["fna.config"].EXCEL_FILENAME = name
 
 
 # ---------------------------------------------------------------------------
@@ -46,18 +67,20 @@ log = logging.getLogger("fna_be")
 @app.command()
 def audit(
     save_csv: bool = typer.Option(True, help="Save the data-quality report as a CSV under data/outputs/audit/."),
+    workbook: Optional[str] = WorkbookOpt,
 ) -> None:
     """Run configuration validation plus a data-quality/granularity audit of the input workbook."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import OUTPUTS_DIR, PROJECT_ROOT
     log_file = configure_logging("audit", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
     ok = _run_validation_checks(verbose=True)
 
-    from fna_be.io.indicators.quality import build_granularity_report
-    from fna_be.io.excel import OPTIONAL_SHEETS, SHEETS, read_inputs
-    from fna_be.model.run import _open_workbook
+    from fna.io.indicators.quality import build_granularity_report
+    from fna.io.excel import OPTIONAL_SHEETS, SHEETS, read_inputs
+    from fna.model.run import _open_workbook
 
     wb = _open_workbook()
     inputs = read_inputs(wb)
@@ -67,7 +90,7 @@ def audit(
     typer.echo(report.to_string(index=False))
 
     if save_csv:
-        out_dir = PROJECT_ROOT / "data" / "outputs" / "audit"
+        out_dir = OUTPUTS_DIR / "audit"
         out_dir.mkdir(parents=True, exist_ok=True)
         csv_path = out_dir / "data_quality_report.csv"
         report.to_csv(csv_path, index=False)
@@ -83,79 +106,104 @@ def audit(
 
 
 # ---------------------------------------------------------------------------
-# 2. refresh-data
+# 2. fetch
 # ---------------------------------------------------------------------------
 
-@app.command(name="refresh-data")
-def refresh_data(
-    country: str = typer.Option("BE", help="ENTSO-E country code to fetch (e.g. BE, FR, NL)."),
-    year: int = typer.Option(..., help="Calendar year to fetch from ENTSO-E."),
+@app.command(name="fetch")
+def fetch_data(
+    country: str = typer.Option(..., "--country", help="ENTSO-E country code, e.g. BE, FR, NL."),
+    year: int = typer.Option(..., "--year", help="Calendar year to fetch from ENTSO-E."),
 ) -> None:
-    """Refresh representative-day inputs from ENTSO-E for COUNTRY / YEAR.
+    """Fetch a country/year of hourly ENTSO-E data into data/inputs/raw_<CC><year>/ (needs ENTSOE_API_KEY)."""
 
-    Sets ENTSOE_COUNTRY_CODE / ENTSOE_DATA_YEAR before running rep_days.py's
-    refresh pipeline, so 02_RepHours, 03_RepDays, 05_IntercoProfiles,
-    07_RES_Portfolios and 08_RES_CF_Profiles are rebuilt from live data.
-    """
-
-    os.environ["ENTSOE_COUNTRY_CODE"] = country.upper()
-    os.environ["ENTSOE_DATA_YEAR"] = str(year)
-
-    from fna_be.config import PROJECT_ROOT
-    log_file = configure_logging("refresh-data", PROJECT_ROOT)
+    from fna.config import PROJECT_ROOT, raw_data_dir
+    log_file = configure_logging("fetch", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
-    log.info("Refreshing representative-day inputs for %s, %s", country.upper(), year)
 
-    import fna_be.inputs.rep_days as rep_days
-    rep_days.main()
-    typer.echo(f"Done: refreshed representative-day inputs for {country.upper()} {year}.")
+    from fna.inputs.fetch import fetch_country_year
+
+    cc = country.upper()
+    out_dir = raw_data_dir(cc, year)
+    fetch_country_year(cc, year, out_dir)
+    typer.echo(f"Done: fetched {cc} {year} into {out_dir}.")
 
 
 # ---------------------------------------------------------------------------
 # 3. build-rep-days
 # ---------------------------------------------------------------------------
 
-@app.command(name="build-rep-days")
-def build_rep_days(
-    clusters: int = typer.Option(..., min=1, help="Number of representative days (k-means clusters) to build."),
+@app.command(name="build-full-year")
+def build_full_year(
+    country: str = typer.Option(..., "--country", help="Country code, e.g. BE, FR, NL."),
+    year: int = typer.Option(..., "--year", help="Calendar data year to pull from ENTSO-E."),
+    template: Optional[str] = typer.Option(None, "--template", help="Workbook in data/inputs/excel/ providing the structural sheets (fleet, flex, interconnectors). Defaults to the current input workbook."),
+    fetch: bool = typer.Option(True, "--fetch/--no-fetch", help="Fetch ENTSO-E data if the local cache is missing (needs ENTSOE_API_KEY)."),
 ) -> None:
-    """Rebuild 02_RepHours / 03_RepDays with CLUSTERS representative days.
+    """Generate a full-year (8760 h) input workbook data/inputs/excel/<CC>_FullYear<year>.xlsx.
 
-    Re-runs the same ENTSO-E-based pipeline as refresh-data, with
-    REPRESENTATIVE_DAY_CLUSTERS overridden so the k-means clustering produces
-    exactly CLUSTERS representative days (uses the country/year already
-    configured via ENTSOE_COUNTRY_CODE / ENTSOE_DATA_YEAR / .env unless
-    overridden by a prior `refresh-data` call in the same process).
+    Hourly time-series come from ENTSO-E for COUNTRY/YEAR; structural sheets
+    (thermal fleet, flex/storage, interconnectors) come from --template. The
+    output's assumption sheets/rows are colour-coded amber for you to review.
     """
 
-    os.environ["REPRESENTATIVE_DAY_CLUSTERS"] = str(clusters)
+    from fna.config import EXCEL_DIR, PROJECT_ROOT
+    log_file = configure_logging("build-full-year", PROJECT_ROOT)
+    log.info("Logging to %s", log_file)
 
-    from fna_be.config import PROJECT_ROOT
+    from pathlib import Path as _Path
+    from fna.inputs.full_year import build_full_year_workbook
+
+    template_path = (EXCEL_DIR / _Path(template).name) if template else None
+    out = build_full_year_workbook(country=country, year=year, template=template_path, do_fetch=fetch)
+    typer.echo(f"Done: wrote {out}. Review the amber-flagged sheets, then run "
+               f"`build-rep-days --country {country.upper()} --year {year}`.")
+
+
+@app.command(name="build-rep-days")
+def build_rep_days(
+    country: str = typer.Option(..., "--country", help="Country code, e.g. BE, FR, NL."),
+    year: int = typer.Option(..., "--year", help="Year of the full-year workbook to compress."),
+    days: Optional[int] = typer.Option(None, "--days", min=1, help="Number of representative days. Omit to let the elbow method pick the optimal count."),
+    seed: int = typer.Option(42, "--seed", help="Random seed for k-means clustering."),
+) -> None:
+    """Compress data/inputs/excel/<CC>_FullYear<year>.xlsx into a representative-day workbook
+    data/inputs/excel/<CC>_RepDays<year>.xlsx.
+
+    Clusters the 365 days on demand + wind + solar shapes into --days
+    representative days (each weighted by its cluster size); with --days omitted,
+    the optimal count is chosen by the elbow method on clustering inertia.
+    """
+
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("build-rep-days", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
-    log.info("Rebuilding representative days with %d clusters", clusters)
 
-    import fna_be.inputs.rep_days as rep_days
-    rep_days.main()
-    typer.echo(f"Done: rebuilt representative days with {clusters} clusters.")
+    from fna.inputs.rep_days import build_rep_days_workbook
+
+    out = build_rep_days_workbook(country=country, year=year, n_days=days, seed=seed)
+    typer.echo(f"Done: wrote {out}. Use it for a run with: "
+               f"fna run -w {out.name}")
 
 
 # ---------------------------------------------------------------------------
-# 4. run-deterministic
+# 4. run / run-deterministic
 # ---------------------------------------------------------------------------
 
+@app.command(name="run")
 @app.command(name="run-deterministic")
 def run_deterministic(
-    target_year: Optional[int] = typer.Option(None, "--target-year", help="Target year (e.g. 2025, 2030, 2035). Defaults to 01_Control.target_year."),
+    target_year: Optional[int] = typer.Option(None, "--target-year", "-y", help="Target year (e.g. 2025, 2030, 2035). Defaults to 01_Control.target_year."),
+    workbook: Optional[str] = WorkbookOpt,
 ) -> None:
     """Run a single deterministic UC/ED optimisation and write the FNA output workbook."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("run-deterministic", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import fna_be.model.run as main
-    from fna_be.io.excel import read_inputs
+    import fna.model.run as main
+    from fna.io.excel import read_inputs
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
@@ -174,22 +222,25 @@ def run_deterministic(
 
 
 # ---------------------------------------------------------------------------
-# 5. run-monte-carlo
+# 5. mc / run-monte-carlo
 # ---------------------------------------------------------------------------
 
+@app.command(name="mc")
 @app.command(name="run-monte-carlo")
 def run_monte_carlo_cmd(
-    target_year: Optional[int] = typer.Option(None, "--target-year", help="Target year (e.g. 2025, 2030, 2035). Defaults to 01_Control.target_year."),
-    scenarios: Optional[int] = typer.Option(None, "--scenarios", min=1, help="Number of Monte Carlo scenarios. Defaults to 01_Control.n_mc_scenarios."),
+    target_year: Optional[int] = typer.Option(None, "--target-year", "-y", help="Target year (e.g. 2025, 2030, 2035). Defaults to 01_Control.target_year."),
+    scenarios: Optional[int] = typer.Option(None, "--scenarios", "-n", min=1, help="Number of Monte Carlo scenarios. Defaults to 01_Control.n_mc_scenarios."),
+    workbook: Optional[str] = WorkbookOpt,
 ) -> None:
     """Run the Monte Carlo ensemble (PECD weather scenarios) and write the MC summary sheets/charts."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("run-monte-carlo", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import fna_be.model.run as main
-    from fna_be.io.excel import read_inputs, read_uncertainty_params
+    import fna.model.run as main
+    from fna.io.excel import read_inputs, read_uncertainty_params
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
@@ -198,6 +249,8 @@ def run_monte_carlo_cmd(
 
     mc_params = read_uncertainty_params(wb)
     mc_params["run_monte_carlo"] = True
+    if target_year is not None:
+        mc_params["pecd_target_year"] = int(inputs["target_year"])
     if scenarios is not None:
         mc_params["n_mc_scenarios"] = scenarios
 
@@ -225,15 +278,17 @@ def run_monte_carlo_cmd(
 @app.command(name="compute-fna-indicators")
 def compute_fna_indicators(
     target_year: Optional[int] = typer.Option(None, "--target-year", help="Target year matching a previous run. Defaults to 01_Control.target_year."),
+    workbook: Optional[str] = WorkbookOpt,
 ) -> None:
     """Recompute the ACER FNA indicator sheets (40-43, 46) from existing CSV outputs, without re-running GAMS."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("compute-fna-indicators", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import fna_be.model.run as main
-    from fna_be.io.excel import read_inputs
+    import fna.model.run as main
+    from fna.io.excel import read_inputs
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
@@ -252,15 +307,17 @@ def compute_fna_indicators(
 @app.command(name="fine-tune")
 def fine_tune(
     target_year: Optional[int] = typer.Option(None, "--target-year", help="Target year matching a previous run. Defaults to 01_Control.target_year."),
+    workbook: Optional[str] = WorkbookOpt,
 ) -> None:
     """Recompute the Article-14 / DSO / TSO network-needs sheets (44, 45, 47) from existing CSV outputs."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("fine-tune", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import fna_be.model.run as main
-    from fna_be.io.excel import read_inputs
+    import fna.model.run as main
+    from fna.io.excel import read_inputs
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
@@ -291,10 +348,13 @@ def fine_tune(
 # ---------------------------------------------------------------------------
 
 @app.command()
-def validate() -> None:
+def validate(
+    workbook: Optional[str] = WorkbookOpt,
+) -> None:
     """Validate configuration, the input workbook schema, and the GAMS/PECD setup (no run)."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("validate", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
@@ -313,16 +373,18 @@ def validate() -> None:
 @app.command(name="make-report")
 def make_report(
     target_year: Optional[int] = typer.Option(None, "--target-year", help="Target year matching a previous run. Defaults to 01_Control.target_year."),
+    workbook: Optional[str] = WorkbookOpt,
 ) -> None:
     """Build a Markdown summary report bundling FNA indicator tables and charts for a run."""
 
-    from fna_be.config import PROJECT_ROOT
+    _apply_workbook(workbook)
+    from fna.config import PROJECT_ROOT
     log_file = configure_logging("make-report", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import fna_be.model.run as main
-    from fna_be.io.excel import read_inputs
-    from fna_be.plots.report import build_markdown_report
+    import fna.model.run as main
+    from fna.io.excel import read_inputs
+    from fna.plots.report import build_markdown_report
 
     wb = main._open_workbook()
     inputs = read_inputs(wb)
@@ -352,8 +414,8 @@ def _resolve_year(inputs: dict, target_year: Optional[int]):
     with ``_<year>``.
     """
 
-    from fna_be.config import paths_for_year
-    from fna_be.model.multi_year import _inputs_for_year
+    from fna.config import paths_for_year
+    from fna.model.multi_year import _inputs_for_year
 
     base_year = inputs["target_year"]
     if target_year is None or int(target_year) == int(base_year):
@@ -368,23 +430,23 @@ def _resolve_postprocess_paths(inputs: dict, target_year: Optional[int]):
     (compute-fna-indicators / fine-tune / make-report), which reads a previous
     run's outputs rather than solving.
 
-    For the base year this points at the most recent isolated run
-    (``runs/latest``); for an explicit year it uses that year's folder."""
+    For the base year this points at the most recent isolated run directory;
+    for an explicit year it uses that year's folder."""
 
-    from fna_be.config import latest_run_dir, paths_from_run_dir
-    from fna_be.model.multi_year import _inputs_for_year
+    from fna.config import most_recent_run_dir, paths_from_run_dir
+    from fna.model.multi_year import _inputs_for_year
 
     base_year = inputs["target_year"]
     if target_year is None or int(target_year) == int(base_year):
-        run_dir = latest_run_dir()
+        run_dir = most_recent_run_dir()
         if run_dir is None:
             raise typer.BadParameter(
                 "No previous run found under data/outputs/runs/. Run "
-                "`run-deterministic` or `run-monte-carlo` first."
+                "`run` or `mc` first."
             )
         return inputs, paths_from_run_dir(run_dir), ""
 
-    from fna_be.config import paths_for_year
+    from fna.config import paths_for_year
 
     year_inputs = _inputs_for_year(inputs, int(target_year))
     return year_inputs, paths_for_year(int(target_year)), f"_{target_year}"
@@ -396,8 +458,8 @@ def _run_validation_checks(verbose: bool) -> bool:
     present); GAMS/PECD issues are reported as warnings only, since
     `validate`/`audit` should work without a GAMS licence."""
 
-    import fna_be.config as config
-    from fna_be.config import EXCEL_FILENAME, EXPECTED_INPUT_SHEETS, OPTIONAL_INPUT_SHEETS, MC_DEFAULTS, PROJECT_ROOT
+    import fna.config as config
+    from fna.config import EXCEL_FILENAME, EXPECTED_INPUT_SHEETS, OPTIONAL_INPUT_SHEETS, MC_DEFAULTS, PROJECT_ROOT, resolve_input_workbook
 
     ok = True
 
@@ -406,7 +468,7 @@ def _run_validation_checks(verbose: bool) -> bool:
         typer.echo(cfg_message)
     ok = ok and cfg_ok
 
-    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
+    wb_path = resolve_input_workbook(EXCEL_FILENAME)
     if not wb_path.exists():
         typer.echo(f"ERROR: input workbook not found: {wb_path}")
         return False
@@ -414,7 +476,7 @@ def _run_validation_checks(verbose: bool) -> bool:
         typer.echo(f"Input workbook: {wb_path}")
 
     try:
-        from fna_be.model.run import _open_workbook
+        from fna.model.run import _open_workbook
 
         wb = _open_workbook()
         sheet_names = set(wb.sheetnames)
@@ -434,7 +496,7 @@ def _run_validation_checks(verbose: bool) -> bool:
         typer.echo(f"Note: optional sheets not present (will be treated as empty): {missing_optional}")
 
     try:
-        from fna_be.model.gams import _resolve_gams_exe
+        from fna.model.gams import _resolve_gams_exe
 
         gams_exe = _resolve_gams_exe()
         if verbose:

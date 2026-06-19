@@ -31,19 +31,32 @@ from openpyxl import Workbook, load_workbook  # type: ignore
 from openpyxl.drawing.image import Image as _XLImage  # type: ignore
 from openpyxl.styles import Font, PatternFill  # type: ignore
 
-from fna_be.config import (
+from fna.config import (
+    ENTSOE_COUNTRY_CODE,
+    ENTSOE_DATA_YEAR,
     MC_CONFIG_SHEET,
     MC_DEFAULTS,
     PROJECT_ROOT,
     SHORTTERM_DN_PERCENTILE,
     SHORTTERM_UP_PERCENTILE,
     WIND_RESOURCE_IDS,
+    csv_output_dir,
+    raw_data_dir,
 )
 
 log = logging.getLogger(__name__)
 
 EXCEL_READ_CHUNK_ROWS = 5_000
 EXCEL_WRITE_CHUNK_ROWS = 5_000
+
+DETERMINISTIC_CHART_SHEET = "40_Deterministic_Charts"
+RISK_CHART_SHEET = "54_Risk_MC_Charts"
+LEGACY_CHART_SHEETS = {
+    "17_FNA_Indicator_Charts",
+    "40_Charts",
+    "54_MC_Charts",
+    "61_CrossYear_Charts",
+}
 
 # Required sheets in the v2 workbook.
 SHEETS = {
@@ -477,6 +490,15 @@ def write_inc_files(inputs: dict[str, Any], inc_dir: Path, out_dir: Path) -> Non
         "curt_penalty": _num(control.get("curtailment_penalty_EUR_per_MWh", 5)),
         "reserve_slack_penalty": _num(control.get("reserve_slack_penalty_EUR_per_MW", 5000)),
         "network_slack_penalty": _num(control.get("network_slack_penalty_EUR_per_MW", 8000)),
+        # GAMS solver controls (applied as model attributes in the .gms). Set
+        # these in 01_Control to override the defaults without editing GAMS.
+        "gamsOptcr": _num(control.get("gams_optcr", 0.1)),
+        "gamsOptca": _num(control.get("gams_optca", 0)),
+        "gamsReslim": _num(control.get("gams_reslim", 1200)),
+        "gamsIterlim": _num(control.get("gams_iterlim", 2000000000)),
+        "gamsLimrow": _num(control.get("gams_limrow", 4)),
+        "gamsLimcol": _num(control.get("gams_limcol", 4)),
+        "gamsThreads": _num(control.get("gams_threads", 0)),
     }
 
     # Write config.inc and data.inc.
@@ -539,13 +561,17 @@ def write_inc_files(inputs: dict[str, Any], inc_dir: Path, out_dir: Path) -> Non
 
 def parse_csv_results(out_dir: Path, *_args) -> dict[str, Any]:
     """Parse all v2 CSV outputs from GAMS."""
+    out_dir = Path(out_dir)
+    result_dir = csv_output_dir(out_dir)
+    if not result_dir.exists():
+        result_dir = out_dir
     paths = {
-        "dispatch": out_dir / "dispatch.csv",
-        "indicators": out_dir / "fna_indicators.csv",
-        "price": out_dir / "price.csv",
-        "residual": out_dir / "residual.csv",
-        "storage": out_dir / "storage.csv",
-        "reserve": out_dir / "reserve.csv",
+        "dispatch": result_dir / "dispatch.csv",
+        "indicators": result_dir / "fna_indicators.csv",
+        "price": result_dir / "price.csv",
+        "residual": result_dir / "residual.csv",
+        "storage": result_dir / "storage.csv",
+        "reserve": result_dir / "reserve.csv",
     }
     for name, p in paths.items():
         if not p.exists():
@@ -553,7 +579,7 @@ def parse_csv_results(out_dir: Path, *_args) -> dict[str, Any]:
     out = {name: _read_csv_robust(p) for name, p in paths.items()}
 
     # network.csv is written by v3.1+ GAMS models; older outputs may not have it.
-    network_path = out_dir / "network.csv"
+    network_path = result_dir / "network.csv"
     out["network"] = _read_csv_robust(network_path) if network_path.exists() else pd.DataFrame()
     return out
 
@@ -597,7 +623,7 @@ def write_results(
     # ACER-native indicator tables (sheets 40-43, 41b, 42b, 46).
     if rep_hours is not None and rep_days is not None:
         try:
-            from fna_be.io.indicators.core import build_fna_indicators
+            from fna.io.indicators.core import build_fna_indicators
 
             control = control or {}
             tables = build_fna_indicators(
@@ -625,7 +651,7 @@ def write_results(
 
         # DSO / TSO / Article-14 fine-tuning needs (sheets 44, 45, 47).
         try:
-            from fna_be.io.indicators.network import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
+            from fna.io.indicators.network import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
 
             network_csv = results.get("network")
             dso_table = compute_dso_needs(results["residual"], rep_hours, dso_zones)
@@ -645,7 +671,7 @@ def write_results(
 
         # Consolidated RES-integration report (sheet 14, ACER Art. 8).
         try:
-            from fna_be.io.indicators.res_integration import write_res_integration_to_excel
+            from fna.io.indicators.res_integration import write_res_integration_to_excel
 
             res_portfolios = (input_frames or {}).get("res")
             if isinstance(res_portfolios, pd.DataFrame) and not res_portfolios.empty:
@@ -658,7 +684,7 @@ def write_results(
 
         # Consolidated ramping-needs report (sheet 15, ACER Art. 9).
         try:
-            from fna_be.io.indicators.ramping import write_ramping_to_excel
+            from fna.io.indicators.ramping import write_ramping_to_excel
 
             frames = input_frames or {}
             extra_tables["ramping"] = write_ramping_to_excel(
@@ -671,12 +697,16 @@ def write_results(
 
         # Short-term flexibility needs report (sheet 16, ACER Art. 10).
         try:
-            from fna_be.io.indicators.shortterm import build_historical_error_series, build_short_term, compute_scaling_factors
+            from fna.io.indicators.shortterm import build_historical_error_series, build_short_term, compute_scaling_factors
 
             frames = input_frames or {}
             res_portfolios = frames.get("res")
             reserve_forecast_error = frames.get("reserves")
-            raw_dir = PROJECT_ROOT / "data" / "raw_be2023"
+            control = control or {}
+            raw_country = str(control.get("entsoe_country_code") or ENTSOE_COUNTRY_CODE).upper()
+            raw_year_value = control.get("entsoe_data_year") or ENTSOE_DATA_YEAR or control.get("target_year") or 2023
+            raw_year = int(_num(raw_year_value) or 2023)
+            raw_dir = raw_data_dir(raw_country, raw_year)
             load_path = raw_dir / "load.csv"
             res_actual_path = raw_dir / "res_generation_actual.csv"
             res_forecast_path = raw_dir / "res_generation_forecast.csv"
@@ -703,7 +733,6 @@ def write_results(
                             "solar": _num(row.get("Solar", 0.0)),
                         }
 
-                control = control or {}
                 target_year = int(_num(control.get("target_year", 2025))) or 2025
                 up_pct = _num(control.get("shortterm_up_percentile", 99.9)) or 99.9
                 dn_pct = _num(control.get("shortterm_dn_percentile", 0.1))
@@ -743,7 +772,7 @@ def write_results(
     # summary (sheet 48). Both are pure transparency reports over the inputs.
     if input_frames is not None:
         try:
-            from fna_be.io.indicators.quality import build_granularity_report
+            from fna.io.indicators.quality import build_granularity_report
 
             sheet_names = {**SHEETS, **OPTIONAL_SHEETS}
             dq_table = build_granularity_report(input_frames, sheet_names)
@@ -753,7 +782,7 @@ def write_results(
             log.warning("Could not build data-quality report: %s", exc)
 
         try:
-            from fna_be.io.indicators.quality import summarise_barriers
+            from fna.io.indicators.quality import summarise_barriers
 
             barriers_df = input_frames.get("barriers")
             if isinstance(barriers_df, pd.DataFrame) and not barriers_df.empty:
@@ -766,7 +795,7 @@ def write_results(
     # Industry-standard charts for the FNA indicator tables (sheet 17).
     if img_dir is not None and extra_tables:
         try:
-            from fna_be.plots.fna_charts import generate_fna_indicator_charts
+            from fna.plots.fna_charts import generate_fna_indicator_charts
 
             generate_fna_indicator_charts(extra_tables, img_dir, wb=wb, sheet_suffix=sheet_suffix)
         except Exception as exc:
@@ -903,17 +932,18 @@ def write_mc_charts_to_excel(
 ) -> None:
     """Place generated MC chart PNGs on a workbook dashboard sheet."""
 
-    sheet_name = f"54_MC_Charts{sheet_suffix}"
-    sht = _ws_get_or_create(wb, sheet_name)
+    sheet_name = f"{RISK_CHART_SHEET}{sheet_suffix}"
+    sht = _reset_chart_sheet(wb, sheet_name)
 
-    _set_cell(sht, "A1", "Monte Carlo Results Dashboard", bold=True, size=16)
-    _set_cell(sht, "A2", f"Successful scenarios: {successful_scenarios} / {requested_scenarios}", italic=True)
+    _set_cell(sht, "A1", "Monte Carlo And Cross-Year Risk Charts", bold=True, size=16)
+    _set_cell(sht, "A2", f"Monte Carlo successful scenarios: {successful_scenarios} / {requested_scenarios}", italic=True)
+    _set_cell(sht, "A3", "Sheet groups: uncertainty bands and risk distributions first; cross-year trend charts append below when a multi-year run is available.", italic=True)
 
     existing = [(name, Path(path)) for name, path in chart_paths.items() if Path(path).exists()]
     row_stride = 38
     col_positions = ["A", "M"]
     for index, (name, img) in enumerate(existing):
-        row = 4 + (index // len(col_positions)) * row_stride
+        row = 5 + (index // len(col_positions)) * row_stride
         column = col_positions[index % len(col_positions)]
         _set_cell(sht, f"{column}{row - 1}", name.replace("_", " ").title())
         try:
@@ -1033,6 +1063,28 @@ def _ws_get_or_create(wb: Workbook, sheet_name: str) -> Any:
     if name in wb.sheetnames:
         del wb[name]
     return wb.create_sheet(title=name)
+
+
+def _ws_get_existing_or_create(wb: Workbook, sheet_name: str) -> Any:
+    """Return an existing worksheet by name, or create it without replacing."""
+
+    name = sheet_name[:31]
+    if name in wb.sheetnames:
+        return wb[name]
+    return wb.create_sheet(title=name)
+
+
+def _reset_chart_sheet(wb: Workbook, sheet_name: str, *, delete_legacy: bool = True) -> Any:
+    """Create a fresh consolidated chart sheet and remove old chart tabs."""
+
+    target = sheet_name[:31]
+    legacy_prefixes = tuple(name[:24] for name in LEGACY_CHART_SHEETS)
+    for name in list(wb.sheetnames):
+        is_target = name == target
+        is_legacy = delete_legacy and name.startswith(legacy_prefixes) and name != target
+        if is_target or is_legacy:
+            del wb[name]
+    return wb.create_sheet(title=target)
 
 
 def _set_cell(sht: Any, ref: str, value: Any, *, bold: bool = False, italic: bool = False, size: int | None = None) -> None:

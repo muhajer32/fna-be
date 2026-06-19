@@ -50,8 +50,8 @@ Method (matches the user's brief, ACER terminology in parentheses):
 Data-availability note
 -----------------------
 ACER's methodology asks for >=2 years of historical D-1 forecast/actual data.
-Only ENTSO-E 2023 data is currently cached (`data/raw_be2023/load.csv`,
-`res_generation_actual.csv`, `res_generation_forecast.csv`). The functions
+ENTSO-E data is cached under `data/inputs/raw_<CC><year>/`
+(`load.csv`, `res_generation_actual.csv`, `res_generation_forecast.csv`). The functions
 below accept an arbitrary number of historical years concatenated into a
 single time-indexed DataFrame - add a second year's CSVs to get a more robust
 P0.1/P99.9 estimate; with one year, the by-(season,hour) percentiles are based
@@ -69,10 +69,10 @@ import numpy as np
 import pandas as pd
 
 
-from fna_be.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT  # noqa: E402
-from fna_be.io.indicators.core import _merge_calendar, _row, _weighted_sum  # noqa: E402
-from fna_be.io.indicators.ramping import _runs  # noqa: E402
-from fna_be.io.excel import (  # noqa: E402
+from fna.config import ENTSOE_COUNTRY_CODE, ENTSOE_DATA_YEAR, EXCEL_FILENAME, PATHS, PROJECT_ROOT, csv_output_dir, raw_data_dir, resolve_input_workbook  # noqa: E402
+from fna.io.indicators.core import _merge_calendar, _row, _weighted_sum  # noqa: E402
+from fna.io.indicators.ramping import _runs  # noqa: E402
+from fna.io.excel import (  # noqa: E402
     _control_dict,
     _num,
     _read_csv_robust,
@@ -649,17 +649,18 @@ def main() -> None:
     """CLI entry point: read raw history + GAMS outputs + workbook, write the report."""
     from openpyxl import load_workbook
 
-    from fna_be.config import output_excel_path
-    from fna_be.io.excel import _read_sheet
-    from fna_be.model.run import _open_output_workbook
+    from fna.config import output_excel_path
+    from fna.io.excel import _read_sheet
+    from fna.model.run import _open_output_workbook
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     out_dir = Path(PATHS["out_dir"])
-    residual = _read_csv_robust(out_dir / "residual.csv")
-    reserve = _read_csv_robust(out_dir / "reserve.csv")
+    results_dir = csv_output_dir(out_dir) if csv_output_dir(out_dir).exists() else out_dir
+    residual = _read_csv_robust(results_dir / "residual.csv")
+    reserve = _read_csv_robust(results_dir / "reserve.csv")
 
-    raw_dir = PROJECT_ROOT / "data" / "raw_be2023"
+    raw_dir = raw_data_dir(ENTSOE_COUNTRY_CODE, ENTSOE_DATA_YEAR or 2023)
     load_hist = pd.read_csv(raw_dir / "load.csv", index_col=0)
     load_hist.index = pd.to_datetime(load_hist.index, utc=True)
     res_actual_hist = pd.read_csv(raw_dir / "res_generation_actual.csv", index_col=0)
@@ -678,7 +679,7 @@ def main() -> None:
                 "solar": float(row.get("Solar", 0.0)),
             }
 
-    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
+    wb_path = resolve_input_workbook(EXCEL_FILENAME)
     in_wb = load_workbook(wb_path, read_only=True, data_only=True)
     rep_hours = _read_sheet(in_wb, "02_RepHours")
     res_portfolios = _read_sheet(in_wb, "07_RES_Portfolios")

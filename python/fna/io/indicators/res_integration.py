@@ -40,9 +40,9 @@ import numpy as np
 import pandas as pd
 
 
-from fna_be.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT  # noqa: E402
-from fna_be.io.indicators.core import _merge_calendar, _row, _weighted_sum  # noqa: E402
-from fna_be.io.excel import (  # noqa: E402
+from fna.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT, csv_output_dir, resolve_input_workbook  # noqa: E402
+from fna.io.indicators.core import _merge_calendar, _row, _weighted_sum  # noqa: E402
+from fna.io.excel import (  # noqa: E402
     _control_dict,
     _num,
     _read_csv_robust,
@@ -407,28 +407,32 @@ def _opt_num(value: Any) -> float | None:
 
 
 def main() -> None:
-    """CLI entry point: read the latest GAMS outputs + workbook, write the report."""
+    """CLI entry point: read GAMS outputs + workbook, write the report."""
     from openpyxl import load_workbook
 
-    from fna_be.config import output_excel_path
-    from fna_be.io.excel import _read_sheet
-    from fna_be.model.run import _open_output_workbook
+    from fna.config import output_excel_path
+    from fna.io.excel import _read_sheet
+    from fna.model.run import _open_output_workbook
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     out_dir = Path(PATHS["out_dir"])
-    dispatch = _read_csv_robust(out_dir / "dispatch.csv")
-    residual = _read_csv_robust(out_dir / "residual.csv")
+    results_dir = csv_output_dir(out_dir) if csv_output_dir(out_dir).exists() else out_dir
+    dispatch = _read_csv_robust(results_dir / "dispatch.csv")
+    residual = _read_csv_robust(results_dir / "residual.csv")
 
-    wb_path = PROJECT_ROOT / "excel" / EXCEL_FILENAME
+    wb_path = resolve_input_workbook(EXCEL_FILENAME)
     in_wb = load_workbook(wb_path, read_only=True, data_only=True)
     res_portfolios = _read_sheet(in_wb, "07_RES_Portfolios")
     rep_hours = _read_sheet(in_wb, "02_RepHours")
     control = _control_dict(_read_sheet(in_wb, "01_Control"))
 
     mc_results: dict[int, dict[str, pd.DataFrame]] = {}
-    for scenario_dir in sorted(out_dir.glob("scenario_*")):
-        disp_path = scenario_dir / "dispatch.csv"
+    scenario_root = out_dir / "scenarios"
+    scenario_dirs = sorted(scenario_root.glob("scenario_*")) if scenario_root.exists() else sorted(out_dir.glob("scenario_*"))
+    for scenario_dir in scenario_dirs:
+        scenario_results_dir = csv_output_dir(scenario_dir) if csv_output_dir(scenario_dir).exists() else scenario_dir
+        disp_path = scenario_results_dir / "dispatch.csv"
         if disp_path.exists():
             idx = int(scenario_dir.name.split("_")[-1])
             mc_results[idx] = {"dispatch": _read_csv_robust(disp_path)}

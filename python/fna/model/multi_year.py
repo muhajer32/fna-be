@@ -26,7 +26,7 @@ Per-year outputs
   / write_mc_charts_to_excel gets a ``_<year>`` suffix, e.g.
   ``33_Residual_2030``, ``16_FNA_ShortTerm_2035``, ``50_MC_Summary_2030``.
 - A cross-year comparison table (``60_CrossYear_Comparison``) and trend
-  charts (``61_CrossYear_Charts``) are written once, after all years.
+  charts are appended to ``54_Risk_MC_Charts`` once, after all years.
 """
 from __future__ import annotations
 
@@ -40,10 +40,10 @@ from typing import Any
 import pandas as pd
 
 
-from fna_be.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT, output_excel_path, paths_for_year
-from fna_be.plots.cross_year import collect_year_metrics, write_cross_year_to_excel
-from fna_be.io.excel import _num, read_inputs, read_uncertainty_params
-from fna_be.model.run import (
+from fna.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT, output_excel_path, paths_for_year
+from fna.plots.cross_year import collect_year_metrics, write_cross_year_to_excel
+from fna.io.excel import _num, read_inputs, read_uncertainty_params
+from fna.model.run import (
     _clean_generated_outputs,
     _configure_logging,
     _ensure_directories,

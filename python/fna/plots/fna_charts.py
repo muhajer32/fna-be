@@ -9,7 +9,7 @@ Each ``build_*`` function in those modules returns a tidy long-format table
 with columns ``section, scope, key, metric, value, unit, notes``. This module
 reads those tables and renders a handful of industry-standard summary charts
 (grouped bars, heatmaps, percentile/duration curves) as PNGs, then inserts
-them into a dedicated "17_FNA_Indicator_Charts" sheet next to the data sheets.
+them into the consolidated "40_Deterministic_Charts" sheet next to the data sheets.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from fna_be.io.excel import _delete_pictures, sort_xlwings_sheets
-from fna_be.plots.base import COL, _save, _style
+from fna.io.excel import _delete_pictures, sort_xlwings_sheets
+from fna.plots.base import COL, _save, _style
 
 log = logging.getLogger(__name__)
 
@@ -477,7 +477,7 @@ def generate_fna_indicator_charts(
     sheet_suffix: str = "",
 ) -> dict[str, Path]:
     """Render charts for the RES integration / ramping / short-term tidy
-    tables and insert them into ``17_FNA_Indicator_Charts<suffix>``."""
+    tables and insert them into ``40_Deterministic_Charts<suffix>``."""
 
     img_dir = Path(img_dir)
     img_dir.mkdir(parents=True, exist_ok=True)
@@ -501,13 +501,13 @@ def generate_fna_indicator_charts(
         return chart_paths
 
     if wb is not None:
-        from fna_be.io.excel import _add_image, _set_cell, _ws_get_or_create
+        from fna.io.excel import DETERMINISTIC_CHART_SHEET, _add_image, _reset_chart_sheet, _set_cell
 
-        sheet_name = f"17_FNA_Indicator_Charts{sheet_suffix}"
-        sht = _ws_get_or_create(wb, sheet_name)
+        sheet_name = f"{DETERMINISTIC_CHART_SHEET}{sheet_suffix}"
+        sht = _reset_chart_sheet(wb, sheet_name)
 
-        _set_cell(sht, "A1", "FNA Indicator Charts (Sheets 14-16)", bold=True, size=16)
-        _set_cell(sht, "A2", "Industry-standard visualisations of the ACER RES-integration, ramping and short-term flexibility indicators.", italic=True)
+        _set_cell(sht, "A1", "Deterministic And FNA Indicator Charts", bold=True, size=16)
+        _set_cell(sht, "A2", "Sheet groups: FNA indicators first; dispatch, price, reserve and commitment charts below after the deterministic run charts are generated.", italic=True)
 
         row = 4
         for title, charts in sections:
@@ -529,5 +529,5 @@ def generate_fna_indicator_charts(
 
         sort_xlwings_sheets(wb)
 
-    log.info("Generated %d FNA indicator charts (sheet 17%s)", len(chart_paths), sheet_suffix)
+    log.info("Generated %d FNA indicator charts (%s%s)", len(chart_paths), DETERMINISTIC_CHART_SHEET, sheet_suffix)
     return chart_paths

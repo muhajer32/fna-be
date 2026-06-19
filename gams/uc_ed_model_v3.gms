@@ -33,7 +33,9 @@ $INCLUDE %DATA_INC%
 * Sets:    t, gd, r, f, b, nw, next(t,tt), firstT(t), lastT(t),
 *          sameDay(t,tt), nwActive(nw,t,r)
 * Scalars: useUC, useNetwork, socCyclic, voll, co2_price, curt_penalty,
-*          reserve_slack_penalty, network_slack_penalty
+*          reserve_slack_penalty, network_slack_penalty,
+*          gamsOptcr, gamsOptca, gamsReslim, gamsIterlim, gamsLimrow,
+*          gamsLimcol, gamsThreads  (solver controls; see section 5)
 * Params:  weight, demand, capBlock, nBlocks, pminPct, varCost, emis,
 *          startupCost, rampUp, rampDn, genAvail, resCap, resCF, resAvail,
 *          curtShare, flexUpCap, flexDnCap, flexEnergy, flexAvailUp,
@@ -235,10 +237,18 @@ if(useNetwork < 0.5,
 Model FNA_ED_UC_v3 / all /;
 Option MIP = CPLEX;
 Option LP  = CPLEX;
-Option reslim = 1200;
-Option optcr = 0.1;
-Option limrow = 4;
-Option limcol = 4;
+
+* Solver controls come from Excel (01_Control -> data.inc scalars), not hard-coded.
+* Defaults live in io/excel.py write_inc_files; override per run in 01_Control:
+*   gams_optcr, gams_optca, gams_reslim, gams_iterlim, gams_limrow,
+*   gams_limcol, gams_threads.
+FNA_ED_UC_v3.optcr   = gamsOptcr;
+FNA_ED_UC_v3.optca   = gamsOptca;
+FNA_ED_UC_v3.reslim  = gamsReslim;
+FNA_ED_UC_v3.iterlim = gamsIterlim;
+FNA_ED_UC_v3.limrow  = gamsLimrow;
+FNA_ED_UC_v3.limcol  = gamsLimcol;
+FNA_ED_UC_v3.threads = gamsThreads;
 
 Solve FNA_ED_UC_v3 minimizing totalCost using MIP;
 

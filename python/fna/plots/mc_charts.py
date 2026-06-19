@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.patches import Rectangle
 
-from fna_be.plots.base import COL, _day_to_month, _indicator_value, _save, _set_period_xticks, _style, _time_sort
+from fna.plots.base import COL, _day_to_month, _indicator_value, _save, _set_period_xticks, _style, _time_sort
 
 log = logging.getLogger(__name__)
 
