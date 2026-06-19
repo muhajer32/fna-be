@@ -75,13 +75,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
 
-from config import EXCEL_FILENAME, PATHS, PROJECT_ROOT  # noqa: E402
-from fna_indicators import _merge_calendar, _row, _weighted_sum  # noqa: E402
-from io_excel import (  # noqa: E402
+from fna_be.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT  # noqa: E402
+from fna_be.io.indicators.core import _merge_calendar, _row, _weighted_sum  # noqa: E402
+from fna_be.io.excel import (  # noqa: E402
     _control_dict,
     _label,
     _num,
@@ -549,9 +546,9 @@ def main() -> None:
     """CLI entry point: read the latest GAMS outputs + workbook, write the report."""
     from openpyxl import load_workbook
 
-    from config import output_excel_path
-    from io_excel import _read_sheet
-    from main import _open_output_workbook
+    from fna_be.config import output_excel_path
+    from fna_be.io.excel import _read_sheet
+    from fna_be.model.run import _open_output_workbook
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

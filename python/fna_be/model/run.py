@@ -19,12 +19,20 @@ import numpy as np
 import pandas as pd
 from openpyxl import Workbook, load_workbook
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
 
-from config import EXCEL_FILENAME, PATHS, PECD_COUNTRY_CODE, PECD_YEARS, PROJECT_ROOT, WIND_RESOURCE_IDS, output_excel_path
-from io_excel import (
+from fna_be.config import (
+    EXCEL_FILENAME,
+    PATHS,
+    PECD_COUNTRY_CODE,
+    PECD_YEARS,
+    PROJECT_ROOT,
+    WIND_RESOURCE_IDS,
+    make_run_paths,
+    output_excel_path,
+    runs_root,
+    update_latest_symlink,
+)
+from fna_be.io.excel import (
     apply_uncertainty_scenario,
     parse_csv_results,
     read_inputs,
@@ -34,11 +42,100 @@ from io_excel import (
     write_mc_results_to_excel,
     write_results,
 )
-from monte_carlo import MonteCarloScenarios, PECDReader, RepresentativeHourMap
-from plot_results import generate_all, generate_mc_summary_charts
-from run_gams import run_model
+from fna_be.model.monte_carlo import MonteCarloScenarios, PECDReader, RepresentativeHourMap
+from fna_be.plots.base import generate_all, generate_mc_summary_charts
+from fna_be.model.gams import run_model
 
 log = logging.getLogger("main")
+
+
+# ---------------------------------------------------------------------------
+# Run provenance / output isolation
+# ---------------------------------------------------------------------------
+
+_SETTINGS_KEYS = (
+    "target_year", "future_year", "use_uc", "use_network", "soc_cyclic",
+    "run_monte_carlo", "n_mc_scenarios", "max_parallel_workers", "seed_random",
+    "use_pecd_data", "pecd_target_year", "market_time_unit_minutes",
+    "curt_penalty", "reserve_slack_penalty", "network_slack_penalty", "voll",
+    "entsoe_country_code", "entsoe_data_year",
+)
+
+
+def _settings_snapshot(inputs: dict[str, Any] | None, mc_params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Capture the run-defining 01_Control values for the manifest, so a run's
+    folder records the settings it was produced with (deterministic vs MC, year,
+    switches, penalties, scenario count)."""
+
+    control = dict((inputs or {}).get("control") or {})
+    if mc_params:
+        control.update({k: mc_params.get(k) for k in ("n_mc_scenarios", "max_parallel_workers", "seed_random", "use_pecd_data", "pecd_target_year") if k in mc_params})
+    snapshot = {k: control.get(k) for k in _SETTINGS_KEYS if k in control}
+    if inputs and inputs.get("target_year") is not None:
+        snapshot.setdefault("target_year", inputs.get("target_year"))
+    return snapshot
+
+
+def begin_run(
+    mode: str,
+    inputs: dict[str, Any] | None,
+    mc_params: dict[str, Any] | None = None,
+    input_filename: str | None = None,
+    n_scenarios: int | None = None,
+) -> tuple[dict[str, Any], Any]:
+    """Mint an isolated run directory + provenance manifest.
+
+    Returns ``(paths, manifest)`` where ``paths`` is the run-rooted path dict
+    (see ``config.make_run_paths``) and ``manifest`` is a started
+    ``run_metadata.RunManifest``. Used by both ``main()`` and the CLI commands so
+    every run lands in its own ``data/outputs/runs/<run_id>/`` folder."""
+
+    from fna_be.run_metadata import RunManifest, capture_environment, new_run_id
+
+    target_year = (inputs or {}).get("target_year")
+    stem = Path(input_filename or EXCEL_FILENAME).stem
+    run_id = new_run_id(mode, target_year, stem)
+    paths = make_run_paths(run_id, input_filename)
+    manifest = RunManifest(
+        run_id=run_id,
+        mode=mode,
+        target_year=target_year,
+        input_workbook=str(input_filename or EXCEL_FILENAME),
+        run_dir=str(paths["run_dir"]),
+        settings=_settings_snapshot(inputs, mc_params),
+        environment=capture_environment(PROJECT_ROOT),
+        n_scenarios_requested=n_scenarios,
+    ).mark_started()
+    log.info("Run id: %s", run_id)
+    log.info("Run directory: %s", paths["run_dir"])
+    return paths, manifest
+
+
+def finish_run(manifest: Any, paths: dict[str, Any], out_wb: Any, status: str = "completed", error: str | None = None) -> None:
+    """Finalise a run: stamp end time, write the metadata sheet(s) into the
+    output workbook, persist the JSON manifest + registry row, and update the
+    ``runs/latest`` pointer. Best-effort - never raises into the run."""
+
+    if manifest is None:
+        return
+    try:
+        from fna_be.run_metadata import persist, write_metadata_sheets
+
+        manifest.mark_finished(status=status, error=error)
+        if out_wb is not None:
+            write_metadata_sheets(out_wb, manifest)
+        persist(manifest, runs_root())
+        if paths and paths.get("run_dir"):
+            update_latest_symlink(Path(paths["run_dir"]))
+    except Exception as exc:
+        log.warning("Could not finalise run manifest: %s", exc)
+
+
+def _output_path(paths: dict[str, Any] | None) -> Path:
+    """Output workbook path for a run (per-run when isolated, else legacy)."""
+    if paths and paths.get("output_xlsx"):
+        return Path(paths["output_xlsx"])
+    return output_excel_path()
 
 
 def main() -> None:
@@ -47,9 +144,6 @@ def main() -> None:
     params = read_uncertainty_params(wb)
     run_mc = _use_monte_carlo(params)
     log_file = PROJECT_ROOT / "logs" / ("run_mc.log" if run_mc else "run.log")
-
-    _clean_generated_outputs()
-    _reset_output_workbook(wb)
     _configure_logging(log_file)
 
     try:
@@ -68,6 +162,7 @@ def run_optimisation(
     paths: dict[str, Any] | None = None,
     sheet_suffix: str = "",
     save: bool = True,
+    manifest: Any | None = None,
 ) -> dict[str, Any]:
     """Run the deterministic mean/base case.
 
@@ -77,13 +172,24 @@ def run_optimisation(
     overrides the global PATHS with a per-year folder, and ``sheet_suffix`` is
     appended to every output sheet name. Returns the GAMS results dict, with
     the extra ACER tables (from write_results) under "fna_tables".
+
+    When ``paths`` is None an isolated run folder is minted
+    (``data/outputs/runs/<run_id>/``) and a provenance/compute manifest is
+    recorded; pass ``paths`` (and optionally ``manifest``) to run inside an
+    externally-managed folder, e.g. multi_year's per-year layout.
     """
 
     log.info("=" * 70)
     log.info("Belgium FNA-ED/UC v2 deterministic run started%s", f" (target year {sheet_suffix.lstrip('_')})" if sheet_suffix else "")
     wb = wb or _open_workbook()
-    out_wb = _open_output_workbook(wb)
-    paths = paths or PATHS
+    if inputs is None:
+        log.info("Reading v2 Excel inputs...")
+        inputs = read_inputs(wb)
+
+    owns_run = paths is None
+    if owns_run:
+        paths, manifest = begin_run("deterministic", inputs)
+    out_wb = _open_output_workbook(out_path=_output_path(paths))
     status_cell = _safe_status_cell(wb)
 
     def status(msg: str) -> None:
@@ -92,12 +198,10 @@ def run_optimisation(
 
     try:
         _ensure_directories(paths)
-        if inputs is None:
-            status("Reading v2 Excel inputs...")
-            inputs = read_inputs(wb)
 
         status("Running GAMS 25.1 deterministic model...")
         results = run_model(inputs, {k: str(v) for k, v in paths.items()})
+        _record_solo_timing(manifest, results)
 
         status("Writing output tables...")
         extra_tables = write_results(
@@ -121,14 +225,28 @@ def run_optimisation(
         status("Generating FNA output charts...")
         generate_all(results=results, img_dir=Path(paths["img_dir"]), wb=out_wb)
 
+        if owns_run:
+            finish_run(manifest, paths, out_wb, status="completed")
         if save:
-            out_wb.save(output_excel_path())
+            out_wb.save(_output_path(paths))
         status(f"Done: deterministic optimisation completed in {_elapsed_since(started_at)}.")
+        if owns_run:
+            status(f"Run outputs in {paths['run_dir']}")
         return results
     except Exception as exc:
-        status("Error: see logs/run.log and logs/gams_run.lst")
+        status("Error: see the run's gams_run.log / gams_run.lst")
         log.exception("Run failed: %s", exc)
+        if owns_run:
+            finish_run(manifest, paths, None, status="failed", error=str(exc))
         raise
+
+
+def _record_solo_timing(manifest: Any, results: dict[str, Any]) -> None:
+    """Record GAMS timing from a single (deterministic) solve onto the manifest."""
+    if manifest is None:
+        return
+    timing = results.get("_gams_timing") or {}
+    manifest.gams_wall_seconds_total = timing.get("gams_wall_seconds")
 
 
 def run_postprocess(
@@ -150,8 +268,8 @@ def run_postprocess(
     log.info("=" * 70)
     log.info("Belgium FNA-ED/UC v2 post-processing run started%s", f" (target year {sheet_suffix.lstrip('_')})" if sheet_suffix else "")
     wb = wb or _open_workbook()
-    out_wb = _open_output_workbook(wb)
     paths = paths or PATHS
+    out_wb = _open_output_workbook(out_path=_output_path(paths))
 
     out_dir = Path(paths["out_dir"])
     log.info("Reading existing GAMS CSV outputs from %s", out_dir)
@@ -184,7 +302,7 @@ def run_postprocess(
     generate_all(results=results, img_dir=Path(paths["img_dir"]), wb=out_wb)
 
     if save:
-        out_wb.save(output_excel_path())
+        out_wb.save(_output_path(paths))
     log.info("Done: post-processing completed in %s.", _elapsed_since(started_at))
     return results
 
@@ -205,7 +323,7 @@ def _collect_indicator_tables(
     control = inputs.get("control") or {}
 
     try:
-        from fna_indicators import build_fna_indicators
+        from fna_be.io.indicators.core import build_fna_indicators
 
         tables.update(build_fna_indicators(
             results["residual"], frames.get("hours"), frames.get("days"),
@@ -218,7 +336,7 @@ def _collect_indicator_tables(
         log.warning("Could not build per-need FNA indicator tables: %s", exc)
 
     try:
-        from network_needs import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
+        from fna_be.io.indicators.network import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
 
         tables["dso_needs"] = compute_dso_needs(results["residual"], frames.get("hours"), frames.get("dso_zones"))
         network_csv = results.get("network")
@@ -239,6 +357,7 @@ def run_monte_carlo(
     paths: dict[str, Any] | None = None,
     sheet_suffix: str = "",
     save: bool = True,
+    manifest: Any | None = None,
 ) -> dict[int, dict]:
     """Run the full Monte Carlo workflow.
 
@@ -246,22 +365,25 @@ def run_monte_carlo(
     they let multi_year.py run the MC workflow once per target year, writing
     scenarios to a per-year folder and results to suffixed Excel sheets.
     Returns the per-scenario MC results dict.
+
+    When ``paths`` is None an isolated run folder is minted
+    (``data/outputs/runs/<run_id>/``) with per-scenario sub-folders and a
+    provenance/compute manifest (including per-scenario solve timings).
     """
 
     log.info("=" * 70)
     log.info("Belgium FNA-ED/UC v2 Monte Carlo run started%s", f" (target year {sheet_suffix.lstrip('_')})" if sheet_suffix else "")
     wb = wb or _open_workbook()
-    out_wb = _open_output_workbook(wb)
     mc_params = dict(mc_params or read_uncertainty_params(wb))
-    paths = paths or PATHS
     status_cell = _safe_status_cell(wb)
 
     def status(message: str) -> None:
         _set_status(status_cell, message)
         log.info(message)
 
+    owns_run = paths is None
+    out_wb = None
     try:
-        _ensure_directories(paths)
         n_scenarios = int(mc_params["n_mc_scenarios"])
         max_workers = int(mc_params["max_parallel_workers"])
         seed = mc_params.get("seed_random")
@@ -270,6 +392,12 @@ def run_monte_carlo(
         if inputs_base is None:
             status("Reading base case inputs...")
             inputs_base = read_inputs_with_mc(wb, scenario_id=None)
+
+        if owns_run:
+            paths, manifest = begin_run("monte_carlo", inputs_base, mc_params=mc_params, n_scenarios=n_scenarios)
+        out_wb = _open_output_workbook(out_path=_output_path(paths))
+        _ensure_directories(paths)
+
         mc_params["pecd_target_year"] = int(mc_params.get("pecd_target_year") or inputs_base["target_year"])
         wind_portfolios = _wind_portfolios(inputs_base)
         _validate_wind_capacity(mc_params.get("wind_capacity_mw"), _wind_capacity_mw(inputs_base, wind_portfolios))
@@ -300,6 +428,7 @@ def run_monte_carlo(
             inputs_base,
             uncertainty_scenarios,
             paths=paths,
+            manifest=manifest,
         )
         if not mc_results:
             raise RuntimeError("All scenarios failed.")
@@ -311,16 +440,22 @@ def run_monte_carlo(
         chart_paths = _generate_charts(mc_results, uncertainty_scenarios, n_scenarios, max_workers, img_dir=Path(paths["img_dir"]))
         write_mc_charts_to_excel(out_wb, chart_paths, len(mc_results), n_scenarios, sheet_suffix=sheet_suffix)
 
+        if owns_run:
+            finish_run(manifest, paths, out_wb, status="completed")
         if save:
-            out_wb.save(output_excel_path())
+            out_wb.save(_output_path(paths))
         status(f"Done: Monte Carlo completed with {len(mc_results)} successful scenarios in {_elapsed_since(started_at)}")
         log.info("Base case cost: %.0f EUR", _get_base_cost(mc_results))
         log.info("Cost std dev: %.0f EUR", _get_cost_std(mc_results))
-        log.info("Results written to %s", output_excel_path())
+        log.info("Results written to %s", _output_path(paths))
+        if owns_run:
+            log.info("Run outputs in %s", paths["run_dir"])
         return mc_results
     except Exception as exc:
-        status("Error: see logs/run_mc.log")
+        status("Error: see the run's logs / gams_run.log")
         log.exception("Monte Carlo failed: %s", exc)
+        if owns_run:
+            finish_run(manifest, paths, None, status="failed", error=str(exc))
         raise
 
 
@@ -332,8 +467,14 @@ def run_single_scenario(
     inc_dir_scenario: Path,
     out_dir_scenario: Path,
 ) -> dict:
-    """Run one scenario in a worker process without opening Excel."""
+    """Run one scenario in a worker process without opening Excel. The return
+    dict carries compute timing (``started_at``/``ended_at``/``wall_seconds`` and
+    the GAMS solve time) so the parent can record it on the run manifest."""
 
+    from fna_be.run_metadata import _iso, _now
+
+    t0 = time.perf_counter()
+    started_dt = _now()
     try:
         log.info("[Scenario %s] Starting", scenario_id)
         inputs = apply_uncertainty_scenario(inputs_base, scenario_id, uncertainty_scenarios)
@@ -345,11 +486,23 @@ def run_single_scenario(
         results = run_model(inputs, scenario_paths)
 
         cost = _result_indicator(results, "total_cost", np.nan)
+        timing = results.get("_gams_timing") or {}
         log.info("[Scenario %s] Complete (cost: %.0f EUR)", scenario_id, cost)
-        return {"scenario_id": scenario_id, "results": results, "cost": cost, "error": None}
+        return {
+            "scenario_id": scenario_id, "results": results, "cost": cost, "error": None,
+            "started_at": _iso(started_dt), "ended_at": _iso(_now()),
+            "wall_seconds": round(time.perf_counter() - t0, 3),
+            "gams_wall_seconds": timing.get("gams_wall_seconds"),
+            "gams_resource_seconds": timing.get("gams_resource_seconds"),
+        }
     except Exception as exc:
         log.error("[Scenario %s] Failed: %s", scenario_id, exc, exc_info=True)
-        return {"scenario_id": scenario_id, "results": None, "cost": np.nan, "error": str(exc)}
+        return {
+            "scenario_id": scenario_id, "results": None, "cost": np.nan, "error": str(exc),
+            "started_at": _iso(started_dt), "ended_at": _iso(_now()),
+            "wall_seconds": round(time.perf_counter() - t0, 3),
+            "gams_wall_seconds": None, "gams_resource_seconds": None,
+        }
 
 
 def _use_monte_carlo(params: dict[str, Any]) -> bool:
@@ -378,12 +531,17 @@ def _open_workbook():
     return load_workbook(wb_path, read_only=True, data_only=True)
 
 
-def _open_output_workbook(input_wb: Any = None):
-    """Open (or create) the separate ``<input stem>-output.xlsx`` workbook used
-    for all results/charts. Loads the existing file when present (so post-process
-    runs update it in place); otherwise starts a clean, empty workbook."""
+def _open_output_workbook(input_wb: Any = None, out_path: Path | None = None):
+    """Open (or create) the ``<input stem>-output.xlsx`` workbook used for all
+    results/charts. Loads the existing file when present (so post-process runs
+    update it in place); otherwise starts a clean, empty workbook.
 
-    out_path = output_excel_path()
+    ``out_path`` selects the workbook location; when omitted it falls back to the
+    legacy ``excel/<stem>-output.xlsx`` (used by the standalone fna_* helpers).
+    Run-isolated calls pass the per-run path so each run writes its own workbook.
+    """
+
+    out_path = Path(out_path) if out_path is not None else output_excel_path()
     if out_path.exists():
         return load_workbook(out_path)
 
@@ -508,6 +666,7 @@ def _run_scenarios(
     inputs_base: dict,
     uncertainty_scenarios: dict[int, pd.DataFrame],
     paths: dict[str, Any] | None = None,
+    manifest: Any | None = None,
 ) -> dict[int, dict]:
     paths = paths or PATHS
     scenario_dirs = {}
@@ -538,6 +697,7 @@ def _run_scenarios(
         for future in as_completed(futures):
             result = future.result()
             scenario_id = result["scenario_id"]
+            _record_scenario_timing(manifest, result)
             if result["error"] is None:
                 mc_results[scenario_id] = result["results"]
                 completed += 1
@@ -547,6 +707,27 @@ def _run_scenarios(
 
     log.info("Completed %d/%d scenarios successfully", len(mc_results), n_scenarios)
     return mc_results
+
+
+def _record_scenario_timing(manifest: Any, result: dict[str, Any]) -> None:
+    """Append one scenario's compute timing to the run manifest."""
+    if manifest is None:
+        return
+    try:
+        from fna_be.run_metadata import ScenarioTiming
+
+        manifest.add_scenario(ScenarioTiming(
+            scenario_id=int(result["scenario_id"]),
+            started_at=result.get("started_at"),
+            ended_at=result.get("ended_at"),
+            wall_seconds=result.get("wall_seconds"),
+            gams_wall_seconds=result.get("gams_wall_seconds"),
+            gams_resource_seconds=result.get("gams_resource_seconds"),
+            status="ok" if result.get("error") is None else "failed",
+            error=result.get("error"),
+        ))
+    except Exception as exc:
+        log.debug("Could not record scenario timing: %s", exc)
 
 
 def _generate_charts(

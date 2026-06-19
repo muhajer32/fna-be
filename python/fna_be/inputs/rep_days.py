@@ -20,7 +20,7 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill
 
-from config import (
+from fna_be.config import (
     ENTSOE_API_KEY,
     ENTSOE_BORDER_TO_COUNTRY,
     ENTSOE_COUNTRY_CODE,
@@ -37,7 +37,7 @@ from config import (
     REPRESENTATIVE_DAY_SOURCE_ID,
     REPRESENTATIVE_DAY_TARGET_DAYS,
 )
-from io_excel import ensure_workbook_is_not_open, sort_openpyxl_sheets
+from fna_be.io.excel import ensure_workbook_is_not_open, sort_openpyxl_sheets
 
 
 WORKBOOK_SHEETS = REPRESENTATIVE_DAY_SHEETS

@@ -31,7 +31,7 @@ from openpyxl import Workbook, load_workbook  # type: ignore
 from openpyxl.drawing.image import Image as _XLImage  # type: ignore
 from openpyxl.styles import Font, PatternFill  # type: ignore
 
-from config import (
+from fna_be.config import (
     MC_CONFIG_SHEET,
     MC_DEFAULTS,
     PROJECT_ROOT,
@@ -597,7 +597,7 @@ def write_results(
     # ACER-native indicator tables (sheets 40-43, 41b, 42b, 46).
     if rep_hours is not None and rep_days is not None:
         try:
-            from fna_indicators import build_fna_indicators
+            from fna_be.io.indicators.core import build_fna_indicators
 
             control = control or {}
             tables = build_fna_indicators(
@@ -625,7 +625,7 @@ def write_results(
 
         # DSO / TSO / Article-14 fine-tuning needs (sheets 44, 45, 47).
         try:
-            from network_needs import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
+            from fna_be.io.indicators.network import compute_dso_needs, compute_fine_tuning_needs, compute_tso_needs
 
             network_csv = results.get("network")
             dso_table = compute_dso_needs(results["residual"], rep_hours, dso_zones)
@@ -645,7 +645,7 @@ def write_results(
 
         # Consolidated RES-integration report (sheet 14, ACER Art. 8).
         try:
-            from fna_res_integration import write_res_integration_to_excel
+            from fna_be.io.indicators.res_integration import write_res_integration_to_excel
 
             res_portfolios = (input_frames or {}).get("res")
             if isinstance(res_portfolios, pd.DataFrame) and not res_portfolios.empty:
@@ -658,7 +658,7 @@ def write_results(
 
         # Consolidated ramping-needs report (sheet 15, ACER Art. 9).
         try:
-            from fna_ramping import write_ramping_to_excel
+            from fna_be.io.indicators.ramping import write_ramping_to_excel
 
             frames = input_frames or {}
             extra_tables["ramping"] = write_ramping_to_excel(
@@ -671,7 +671,7 @@ def write_results(
 
         # Short-term flexibility needs report (sheet 16, ACER Art. 10).
         try:
-            from fna_shortterm import build_historical_error_series, build_short_term, compute_scaling_factors
+            from fna_be.io.indicators.shortterm import build_historical_error_series, build_short_term, compute_scaling_factors
 
             frames = input_frames or {}
             res_portfolios = frames.get("res")
@@ -743,7 +743,7 @@ def write_results(
     # summary (sheet 48). Both are pure transparency reports over the inputs.
     if input_frames is not None:
         try:
-            from data_quality_report import build_granularity_report
+            from fna_be.io.indicators.quality import build_granularity_report
 
             sheet_names = {**SHEETS, **OPTIONAL_SHEETS}
             dq_table = build_granularity_report(input_frames, sheet_names)
@@ -753,7 +753,7 @@ def write_results(
             log.warning("Could not build data-quality report: %s", exc)
 
         try:
-            from barriers import summarise_barriers
+            from fna_be.io.indicators.quality import summarise_barriers
 
             barriers_df = input_frames.get("barriers")
             if isinstance(barriers_df, pd.DataFrame) and not barriers_df.empty:
@@ -766,7 +766,7 @@ def write_results(
     # Industry-standard charts for the FNA indicator tables (sheet 17).
     if img_dir is not None and extra_tables:
         try:
-            from fna_charts import generate_fna_indicator_charts
+            from fna_be.plots.fna_charts import generate_fna_indicator_charts
 
             generate_fna_indicator_charts(extra_tables, img_dir, wb=wb, sheet_suffix=sheet_suffix)
         except Exception as exc:

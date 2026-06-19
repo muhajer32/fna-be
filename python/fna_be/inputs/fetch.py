@@ -17,10 +17,8 @@ from pathlib import Path
 
 import pandas as pd
 
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
 
-from config import ENTSOE_API_KEY, PROJECT_ROOT  # noqa: E402
+from fna_be.config import ENTSOE_API_KEY, PROJECT_ROOT  # noqa: E402
 
 OUT_DIR = PROJECT_ROOT / "data" / "raw_be2023"
 TZ = "Europe/Brussels"

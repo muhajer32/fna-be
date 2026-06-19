@@ -9,6 +9,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.egg-info/
 .mypy_cache/
 .pytest_cache/
 
@@ -16,20 +17,24 @@ __pycache__/
 .DS_Store
 ~$*
 
-# Generated GAMS / run data
-data/inputs/
-data/outputs/
-data/raw_be2023/
+# Logs
 logs/
 
-# Large / restricted datasets — not shipped; see data/pecd/README.md
+# Data: track ONLY sample data (+ the PECD download instructions).
+# Everything else under data/ is generated, large, or restricted
+# (data/inputs, data/outputs/runs, data/raw_be2023, data/pecd payload, ...).
+data/*
+!data/sample/
+!data/pecd/
 data/pecd/*
 !data/pecd/README.md
 
-# Working Excel copies — only demo_input.xlsx is tracked
+# Excel: track ONLY the demo workbook. All other workbooks, lock files and
+# pulled VM run outputs are local/generated.
 excel/*.xlsx
 !excel/demo_input.xlsx
 excel/~$*
+excel/vmmc/
 
 # Tooling / IDE
 .claude/

@@ -18,7 +18,7 @@ the SAME sheet/column schema, but:
     (demand, wind/solar CF, cross-border flows, day-ahead prices, forecast
     errors, generation outages) and documented robust assumptions elsewhere
     (flexible-resource availability, reserve dimensioning) per
-    docs/BELGIUM_FNA_DATA_SOURCE_MAP.md.
+    docs/METHODOLOGY.md (§6).
   - 04/06/07/09/13/13b/17/20/01_Control/00_ReadMe: lightly refreshed
     source_id/data_quality/notes; numeric assumptions only changed where a
     real 2023 ENTSO-E figure is a clear improvement (documented per row).
@@ -36,10 +36,8 @@ import openpyxl
 import pandas as pd
 from openpyxl.styles import Font, PatternFill
 
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
 
-from config import EXCEL_FILENAME, PROJECT_ROOT  # noqa: E402
+from fna_be.config import EXCEL_FILENAME, PROJECT_ROOT  # noqa: E402
 
 RAW = PROJECT_ROOT / "data" / "raw_be2023"
 SRC_WB = PROJECT_ROOT / "excel" / EXCEL_FILENAME
@@ -435,7 +433,7 @@ def refresh_sources(sources: pd.DataFrame) -> pd.DataFrame:
          "url": "https://transparency.entsoe.eu/outage-domain/r2/unavailabilityOfGenerationUnits/show", "notes": "Only REMIT-reporting units (>=100MW) are covered; OCGT/CHP/hydro-run units below threshold use the same fleet-level Fossil Gas profile or a seasonal assumption"},
         {"source_id": "S30", "source_name": "Seasonal maintenance assumption",
          "what_it_supports": "11_Availability_Outages for CHP and run-of-river hydro (no UMM coverage)",
-         "url": "", "notes": "documented in docs/BELGIUM_FNA_DATA_SOURCE_MAP.md item 7"},
+         "url": "", "notes": "documented in docs/METHODOLOGY.md (§6) item 7"},
         {"source_id": "S31", "source_name": "ENTSO-E Transparency Platform - UMM Hydro Pumped Storage 2023",
          "what_it_supports": "10_FlexAvailability PSP_COO_PLATE_TAILLE availability",
          "url": "https://transparency.entsoe.eu/outage-domain/r2/unavailabilityOfGenerationUnits/show", "notes": "Coo/Plate-Taille pumped-storage outage events"},
@@ -450,7 +448,7 @@ def refresh_sources(sources: pd.DataFrame) -> pd.DataFrame:
          "url": "", "notes": "Weekday production/business-hours pattern with August industrial shutdown; aggregator-level data is restricted (item 14 in data-source map)"},
         {"source_id": "S35", "source_name": "Belgium FNA data-source map",
          "what_it_supports": "All sheets - canonical mapping of input categories to Belgium/EU sources",
-         "url": "", "notes": "See docs/BELGIUM_FNA_DATA_SOURCE_MAP.md"},
+         "url": "", "notes": "See docs/METHODOLOGY.md (§6)"},
     ]
     return pd.concat([sources, pd.DataFrame(new_rows)], ignore_index=True)
 
@@ -509,7 +507,7 @@ def refresh_readme(readme: pd.DataFrame) -> pd.DataFrame:
          "2023 (8760 hourly rows, D001..D365, weight_days=1 each). Demand, wind/solar capacity factors, "
          "cross-border flows, day-ahead prices, forecast-error stats and generation outages are ENTSO-E 2023 "
          "actuals; flexible-resource availability and reserve dimensioning remain documented assumptions per "
-         "docs/BELGIUM_FNA_DATA_SOURCE_MAP.md. Known limitation: storage SOC cycling is still enforced per "
+         "docs/METHODOLOGY.md (§6). Known limitation: storage SOC cycling is still enforced per "
          "calendar day (same_day_pairs in io_excel.write_inc_files), not per year - multi-day storage dynamics "
          "are therefore not captured without a GAMS-side change."},
     ])

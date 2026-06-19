@@ -39,14 +39,11 @@ from typing import Any
 
 import pandas as pd
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
 
-from config import EXCEL_FILENAME, PATHS, PROJECT_ROOT, output_excel_path, paths_for_year
-from fna_cross_year import collect_year_metrics, write_cross_year_to_excel
-from io_excel import _num, read_inputs, read_uncertainty_params
-from main import (
+from fna_be.config import EXCEL_FILENAME, PATHS, PROJECT_ROOT, output_excel_path, paths_for_year
+from fna_be.plots.cross_year import collect_year_metrics, write_cross_year_to_excel
+from fna_be.io.excel import _num, read_inputs, read_uncertainty_params
+from fna_be.model.run import (
     _clean_generated_outputs,
     _configure_logging,
     _ensure_directories,

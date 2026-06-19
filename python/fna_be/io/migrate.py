@@ -26,10 +26,8 @@ from pathlib import Path
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
 
-from config import PROJECT_ROOT, EXCEL_FILENAME  # noqa: E402
+from fna_be.config import PROJECT_ROOT, EXCEL_FILENAME  # noqa: E402
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 HEADER_FONT = Font(bold=True, color="FFFFFF")

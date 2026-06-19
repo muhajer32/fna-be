@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from openpyxl import Workbook  # type: ignore
 
-from io_excel import _delete_pictures, _indicator_value, _num, _write_df, sort_xlwings_sheets
+from fna_be.io.excel import _delete_pictures, _indicator_value, _num, _write_df, sort_xlwings_sheets
 
 log = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ def write_cross_year_to_excel(
 
     _write_df(wb, "60_CrossYear_Comparison", table)
 
-    from io_excel import _add_image, _set_cell, _ws_get_or_create
+    from fna_be.io.excel import _add_image, _set_cell, _ws_get_or_create
 
     chart_paths = generate_trend_charts(year_metrics, img_dir)
     sht = _ws_get_or_create(wb, "61_CrossYear_Charts")

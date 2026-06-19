@@ -17,7 +17,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+# config.py lives at python/fna_be/config.py, so the repo root is three levels up.
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent
 
 def _load_local_env(path: Path) -> None:
     """Load simple KEY=value entries without requiring python-dotenv."""
@@ -134,6 +135,94 @@ def output_excel_path(input_filename: str | None = None) -> Path:
 
     stem = Path(input_filename or EXCEL_FILENAME).stem
     return PROJECT_ROOT / "excel" / f"{stem}-output.xlsx"
+
+
+def runs_root() -> Path:
+    """Root folder under which every isolated run directory lives."""
+    return PROJECT_ROOT / "data" / "outputs" / "runs"
+
+
+def make_run_paths(
+    run_id: str,
+    input_filename: str | None = None,
+) -> dict[str, Path]:
+    """Per-run copy of PATHS, rooted under ``data/outputs/runs/<run_id>/``.
+
+    Every artefact a run produces - GAMS include files, CSV outputs, per-scenario
+    folders, charts, logs and the output workbook - lands inside this single
+    folder, so deterministic runs, Monte Carlo runs and re-runs with different
+    settings never overwrite each other. ``run_id`` is minted by
+    ``run_metadata.new_run_id`` (timestamp + mode + year + input stem).
+
+    Returns the same keys as ``PATHS`` plus ``run_dir``, ``run_id`` and
+    ``output_xlsx`` (the per-run output workbook path). Monte Carlo scenario
+    folders nest automatically as ``<run_dir>/scenario_<n>`` because
+    ``main._run_scenarios`` derives them from ``out_dir``.
+    """
+
+    return paths_from_run_dir(runs_root() / run_id, input_filename)
+
+
+def paths_from_run_dir(run_dir: Path, input_filename: str | None = None) -> dict[str, Path]:
+    """Build the run-rooted path dict for an *existing* run folder. Used to
+    re-run post-processing (compute-fna-indicators / fine-tune / make-report)
+    against a previous run's outputs without re-solving."""
+
+    run_dir = Path(run_dir)
+    stem = Path(input_filename or EXCEL_FILENAME).stem
+    return {
+        "gms_file": PATHS["gms_file"],
+        "inc_dir": run_dir / "inc",
+        "out_dir": run_dir,
+        "log_file": run_dir / "gams_run.log",
+        "img_dir": run_dir / "images",
+        "run_dir": run_dir,
+        "run_id": run_dir.name,
+        "output_xlsx": run_dir / f"{stem}-output.xlsx",
+    }
+
+
+def latest_run_dir() -> Path | None:
+    """Resolve the most recent run directory (the ``runs/latest`` pointer), or
+    None if no run has been recorded yet."""
+
+    link = runs_root() / "latest"
+    try:
+        if link.is_symlink() or link.exists():
+            resolved = link.resolve()
+            if resolved.exists():
+                return resolved
+    except OSError:
+        pass
+    txt = runs_root() / "latest.txt"
+    if txt.exists():
+        candidate = Path(txt.read_text(encoding="utf-8").strip())
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def update_latest_symlink(run_dir: Path) -> None:
+    """Point ``data/outputs/runs/latest`` at the most recent run directory, so
+    'the last run' always has a stable path. Best-effort: on platforms/filesystems
+    without symlink support, write a ``latest.txt`` pointer file instead."""
+
+    link = runs_root() / "latest"
+    target = Path(run_dir)
+    try:
+        if link.is_symlink() or link.exists():
+            if link.is_symlink() or link.is_file():
+                link.unlink()
+            else:
+                # An unexpected real directory named 'latest'; leave it alone.
+                (runs_root() / "latest.txt").write_text(str(target), encoding="utf-8")
+                return
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        try:
+            (runs_root() / "latest.txt").write_text(str(target), encoding="utf-8")
+        except OSError:
+            pass
 
 
 def paths_for_year(year: int) -> dict[str, Path]:

@@ -24,8 +24,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from io_excel import _delete_pictures, sort_xlwings_sheets
-from plot_results import COL, _save, _style
+from fna_be.io.excel import _delete_pictures, sort_xlwings_sheets
+from fna_be.plots.base import COL, _save, _style
 
 log = logging.getLogger(__name__)
 
@@ -501,7 +501,7 @@ def generate_fna_indicator_charts(
         return chart_paths
 
     if wb is not None:
-        from io_excel import _add_image, _set_cell, _ws_get_or_create
+        from fna_be.io.excel import _add_image, _set_cell, _ws_get_or_create
 
         sheet_name = f"17_FNA_Indicator_Charts{sheet_suffix}"
         sht = _ws_get_or_create(wb, sheet_name)

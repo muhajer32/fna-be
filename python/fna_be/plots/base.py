@@ -230,7 +230,7 @@ def generate_mc_summary_charts(
     )
 
     try:
-        from mc_charts import generate_extra_mc_charts
+        from fna_be.plots.mc_charts import generate_extra_mc_charts
 
         price_df = pd.concat(price_rows, ignore_index=True) if price_rows else pd.DataFrame()
         extra_charts = generate_extra_mc_charts(mc_results, uncertainty_scenarios, price_df, img_dir)
@@ -758,7 +758,7 @@ def _plot_sankey(data, path):
 # Excel integration (updated positions)
 # ------------------------------------------------------------------------------
 def write_charts_sheet(wb: Any, data: dict[str, pd.DataFrame], chart_paths: dict[str, Path]) -> None:
-    from io_excel import _add_image, _set_cell, _ws_get_or_create
+    from fna_be.io.excel import _add_image, _set_cell, _ws_get_or_create
 
     sht = _ws_get_or_create(wb, "40_Charts")
     _set_cell(sht, "A1", "Belgium FNA-ED/UC v2 Output Dashboard", bold=True, size=16)

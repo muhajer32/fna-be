@@ -1,21 +1,19 @@
 """
 fna_be.cli
 ==========
-Command-line workflow for the Belgium FNA-ED/UC v3 prototype.
+Command-line entry point for the Belgium FNA-ED/UC v3 prototype.
 
-Every command is a thin wrapper around the existing scripts/modules in
-``python/`` (``main.py``, ``multi_year.py``, ``rep_days.py``,
-``data_quality_report.py``, ``report.py``, ...). Heavy modules (xlwings,
-GAMS, matplotlib) are imported lazily inside each command so
-``python -m fna_be --help`` stays fast and so environment-variable overrides
-(e.g. ``--country`` / ``--year``) are picked up by ``config.py`` before it is
-first imported.
+Each command is a thin wrapper over the package's stage modules:
+``fna_be.inputs`` (data fetching + rep-days), ``fna_be.io`` (Excel I/O +
+indicators), ``fna_be.model`` (deterministic / Monte Carlo run + GAMS) and
+``fna_be.plots`` (charts + report). Heavy modules (GAMS, matplotlib) are
+imported lazily inside each command so ``fna-be --help`` stays fast and
+environment-variable overrides (e.g. ``--country`` / ``--year``) are picked up
+by ``fna_be.config`` before it is first imported.
 
-Run from the ``python/`` directory:
-
-    python -m fna_be --help
-    python -m fna_be audit
-    python -m fna_be run-deterministic --target-year 2030
+    fna-be --help                              # or:  python -m fna_be --help
+    fna-be audit
+    fna-be run-deterministic --target-year 2030
 """
 from __future__ import annotations
 
@@ -30,12 +28,6 @@ import typer
 
 from fna_be.logging_setup import configure_logging
 
-# python/ (parent of this package) must be importable so we can do
-# `import main`, `import config`, etc. - the existing scripts already assume
-# python/ is on sys.path when run directly.
-_PYTHON_ROOT = Path(__file__).resolve().parent.parent
-if str(_PYTHON_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PYTHON_ROOT))
 
 app = typer.Typer(
     name="fna_be",
@@ -57,15 +49,15 @@ def audit(
 ) -> None:
     """Run configuration validation plus a data-quality/granularity audit of the input workbook."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("audit", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
     ok = _run_validation_checks(verbose=True)
 
-    from data_quality_report import build_granularity_report
-    from io_excel import OPTIONAL_SHEETS, SHEETS, read_inputs
-    from main import _open_workbook
+    from fna_be.io.indicators.quality import build_granularity_report
+    from fna_be.io.excel import OPTIONAL_SHEETS, SHEETS, read_inputs
+    from fna_be.model.run import _open_workbook
 
     wb = _open_workbook()
     inputs = read_inputs(wb)
@@ -82,9 +74,8 @@ def audit(
         typer.echo(f"\nSaved data-quality report: {csv_path}")
 
     typer.echo(
-        "\nSee docs/ACER_FNA_COMPLIANCE_GAP_MATRIX.md for the article-by-article "
-        "compliance self-assessment, and docs/BELGIUM_FNA_DATA_SOURCE_MAP.md for "
-        "per-field data source / proxy status."
+        "\nSee docs/METHODOLOGY.md for the article-by-article compliance "
+        "self-assessment and the per-field data source / proxy status."
     )
 
     if not ok:
@@ -110,13 +101,12 @@ def refresh_data(
     os.environ["ENTSOE_COUNTRY_CODE"] = country.upper()
     os.environ["ENTSOE_DATA_YEAR"] = str(year)
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("refresh-data", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
     log.info("Refreshing representative-day inputs for %s, %s", country.upper(), year)
 
-    import rep_days
-
+    import fna_be.inputs.rep_days as rep_days
     rep_days.main()
     typer.echo(f"Done: refreshed representative-day inputs for {country.upper()} {year}.")
 
@@ -140,13 +130,12 @@ def build_rep_days(
 
     os.environ["REPRESENTATIVE_DAY_CLUSTERS"] = str(clusters)
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("build-rep-days", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
     log.info("Rebuilding representative days with %d clusters", clusters)
 
-    import rep_days
-
+    import fna_be.inputs.rep_days as rep_days
     rep_days.main()
     typer.echo(f"Done: rebuilt representative days with {clusters} clusters.")
 
@@ -161,21 +150,24 @@ def run_deterministic(
 ) -> None:
     """Run a single deterministic UC/ED optimisation and write the FNA output workbook."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("run-deterministic", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import main
-    from io_excel import read_inputs
+    import fna_be.model.run as main
+    from fna_be.io.excel import read_inputs
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
     inputs = read_inputs(wb)
     inputs, paths, sheet_suffix = _resolve_year(inputs, target_year)
 
-    main._ensure_directories(paths)
-    main._clean_generated_outputs(paths)
-    main._reset_output_workbook(wb)
+    # paths is None for the base target year: run_optimisation then mints an
+    # isolated data/outputs/runs/<run_id>/ folder + provenance manifest. For an
+    # explicit non-base year we keep the per-year folder layout.
+    if paths is not None:
+        main._ensure_directories(paths)
+        main._clean_generated_outputs(paths)
 
     main.run_optimisation(wb, started_at=started_at, inputs=inputs, paths=paths, sheet_suffix=sheet_suffix, save=True)
     typer.echo(f"Done: deterministic run complete for target year {inputs['target_year']}.")
@@ -192,12 +184,12 @@ def run_monte_carlo_cmd(
 ) -> None:
     """Run the Monte Carlo ensemble (PECD weather scenarios) and write the MC summary sheets/charts."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("run-monte-carlo", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import main
-    from io_excel import read_inputs, read_uncertainty_params
+    import fna_be.model.run as main
+    from fna_be.io.excel import read_inputs, read_uncertainty_params
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
@@ -209,9 +201,12 @@ def run_monte_carlo_cmd(
     if scenarios is not None:
         mc_params["n_mc_scenarios"] = scenarios
 
-    main._ensure_directories(paths)
-    main._clean_generated_outputs(paths)
-    main._reset_output_workbook(wb)
+    # paths is None for the base target year: run_monte_carlo mints an isolated
+    # run folder (with per-scenario sub-folders) + manifest. Non-base years keep
+    # the per-year folder layout.
+    if paths is not None:
+        main._ensure_directories(paths)
+        main._clean_generated_outputs(paths)
 
     main.run_monte_carlo(
         wb, mc_params=mc_params, started_at=started_at,
@@ -233,21 +228,21 @@ def compute_fna_indicators(
 ) -> None:
     """Recompute the ACER FNA indicator sheets (40-43, 46) from existing CSV outputs, without re-running GAMS."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("compute-fna-indicators", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import main
-    from io_excel import read_inputs
+    import fna_be.model.run as main
+    from fna_be.io.excel import read_inputs
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
     inputs = read_inputs(wb)
-    inputs, paths, sheet_suffix = _resolve_year(inputs, target_year)
+    inputs, paths, sheet_suffix = _resolve_postprocess_paths(inputs, target_year)
 
     results = main.run_postprocess(wb, started_at=started_at, inputs=inputs, paths=paths, sheet_suffix=sheet_suffix, save=True)
     _export_indicator_tables(results.get("fna_tables", {}), Path(paths["out_dir"]))
-    typer.echo(f"Done: FNA indicators recomputed for target year {inputs['target_year']}.")
+    typer.echo(f"Done: FNA indicators recomputed for target year {inputs['target_year']} (run {paths['run_id']}).")
 
 
 # ---------------------------------------------------------------------------
@@ -260,17 +255,17 @@ def fine_tune(
 ) -> None:
     """Recompute the Article-14 / DSO / TSO network-needs sheets (44, 45, 47) from existing CSV outputs."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("fine-tune", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import main
-    from io_excel import read_inputs
+    import fna_be.model.run as main
+    from fna_be.io.excel import read_inputs
 
     started_at = time.perf_counter()
     wb = main._open_workbook()
     inputs = read_inputs(wb)
-    inputs, paths, sheet_suffix = _resolve_year(inputs, target_year)
+    inputs, paths, sheet_suffix = _resolve_postprocess_paths(inputs, target_year)
 
     if not int(inputs.get("control", {}).get("use_network", 0) or 0):
         log.warning(
@@ -299,7 +294,7 @@ def fine_tune(
 def validate() -> None:
     """Validate configuration, the input workbook schema, and the GAMS/PECD setup (no run)."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("validate", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
@@ -321,17 +316,17 @@ def make_report(
 ) -> None:
     """Build a Markdown summary report bundling FNA indicator tables and charts for a run."""
 
-    from config import PROJECT_ROOT
+    from fna_be.config import PROJECT_ROOT
     log_file = configure_logging("make-report", PROJECT_ROOT)
     log.info("Logging to %s", log_file)
 
-    import main
-    from io_excel import read_inputs
-    from report import build_markdown_report
+    import fna_be.model.run as main
+    from fna_be.io.excel import read_inputs
+    from fna_be.plots.report import build_markdown_report
 
     wb = main._open_workbook()
     inputs = read_inputs(wb)
-    inputs, paths, sheet_suffix = _resolve_year(inputs, target_year)
+    inputs, paths, sheet_suffix = _resolve_postprocess_paths(inputs, target_year)
 
     out_dir = Path(paths["out_dir"])
     fna_tables = _load_indicator_tables(out_dir)
@@ -348,20 +343,48 @@ def make_report(
 # ---------------------------------------------------------------------------
 
 def _resolve_year(inputs: dict, target_year: Optional[int]):
-    """Return (inputs, paths, sheet_suffix) for `target_year`.
+    """Return ``(inputs, paths, sheet_suffix)`` for a *run* (solve) command.
 
-    If `target_year` is None or equal to the workbook's base target year,
-    runs against the base PATHS with no sheet suffix. Otherwise mirrors
-    multi_year.py: derives per-year inputs/paths and suffixes output sheets
-    with `_<year>`.
+    For the base target year ``paths`` is None, signalling the run function to
+    mint an isolated ``data/outputs/runs/<run_id>/`` folder + provenance
+    manifest. For an explicit non-base year we mirror multi_year.py: derive
+    per-year inputs/paths (the ``year_<year>`` layout) and suffix output sheets
+    with ``_<year>``.
     """
 
-    from config import PATHS, paths_for_year
-    from multi_year import _inputs_for_year
+    from fna_be.config import paths_for_year
+    from fna_be.model.multi_year import _inputs_for_year
 
     base_year = inputs["target_year"]
     if target_year is None or int(target_year) == int(base_year):
-        return inputs, PATHS, ""
+        return inputs, None, ""
+
+    year_inputs = _inputs_for_year(inputs, int(target_year))
+    return year_inputs, paths_for_year(int(target_year)), f"_{target_year}"
+
+
+def _resolve_postprocess_paths(inputs: dict, target_year: Optional[int]):
+    """Resolve ``(inputs, paths, sheet_suffix)`` for a *post-process* command
+    (compute-fna-indicators / fine-tune / make-report), which reads a previous
+    run's outputs rather than solving.
+
+    For the base year this points at the most recent isolated run
+    (``runs/latest``); for an explicit year it uses that year's folder."""
+
+    from fna_be.config import latest_run_dir, paths_from_run_dir
+    from fna_be.model.multi_year import _inputs_for_year
+
+    base_year = inputs["target_year"]
+    if target_year is None or int(target_year) == int(base_year):
+        run_dir = latest_run_dir()
+        if run_dir is None:
+            raise typer.BadParameter(
+                "No previous run found under data/outputs/runs/. Run "
+                "`run-deterministic` or `run-monte-carlo` first."
+            )
+        return inputs, paths_from_run_dir(run_dir), ""
+
+    from fna_be.config import paths_for_year
 
     year_inputs = _inputs_for_year(inputs, int(target_year))
     return year_inputs, paths_for_year(int(target_year)), f"_{target_year}"
@@ -373,8 +396,8 @@ def _run_validation_checks(verbose: bool) -> bool:
     present); GAMS/PECD issues are reported as warnings only, since
     `validate`/`audit` should work without a GAMS licence."""
 
-    import config
-    from config import EXCEL_FILENAME, EXPECTED_INPUT_SHEETS, OPTIONAL_INPUT_SHEETS, MC_DEFAULTS, PROJECT_ROOT
+    import fna_be.config as config
+    from fna_be.config import EXCEL_FILENAME, EXPECTED_INPUT_SHEETS, OPTIONAL_INPUT_SHEETS, MC_DEFAULTS, PROJECT_ROOT
 
     ok = True
 
@@ -391,7 +414,7 @@ def _run_validation_checks(verbose: bool) -> bool:
         typer.echo(f"Input workbook: {wb_path}")
 
     try:
-        from main import _open_workbook
+        from fna_be.model.run import _open_workbook
 
         wb = _open_workbook()
         sheet_names = set(wb.sheetnames)
@@ -411,7 +434,7 @@ def _run_validation_checks(verbose: bool) -> bool:
         typer.echo(f"Note: optional sheets not present (will be treated as empty): {missing_optional}")
 
     try:
-        from run_gams import _resolve_gams_exe
+        from fna_be.model.gams import _resolve_gams_exe
 
         gams_exe = _resolve_gams_exe()
         if verbose:

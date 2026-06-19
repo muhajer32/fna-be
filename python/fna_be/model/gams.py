@@ -7,17 +7,19 @@ and returns parsed results.
 from __future__ import annotations
 import logging
 import os
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
-from config import GAMS_EXE, GAMS_TIMEOUT, EXPECTED_CSV_OUTPUTS
+from fna_be.config import GAMS_EXE, GAMS_TIMEOUT, EXPECTED_CSV_OUTPUTS
 
 log = logging.getLogger(__name__)
 
 
 def run_model(inputs: dict, paths: dict) -> dict:
-    from io_excel import write_inc_files, parse_csv_results
+    from fna_be.io.excel import write_inc_files, parse_csv_results
 
     gams_exe = _resolve_gams_exe()
     gms_file = Path(paths["gms_file"]).resolve()
@@ -54,8 +56,10 @@ def run_model(inputs: dict, paths: dict) -> dict:
         f"lf={log_file}",
     ]
     log.info("Running GAMS: %s", " ".join(cmd))
+    _gams_t0 = time.perf_counter()
     proc = subprocess.run(cmd, cwd=str(work_dir), capture_output=True, text=True, timeout=GAMS_TIMEOUT, env=os.environ.copy())
-    log.info("GAMS return code: %s", proc.returncode)
+    gams_wall_seconds = round(time.perf_counter() - _gams_t0, 3)
+    log.info("GAMS return code: %s (wall %.1fs)", proc.returncode, gams_wall_seconds)
     if proc.stdout.strip():
         log.info("GAMS stdout:\n%s", proc.stdout.strip())
     if proc.stderr.strip():
@@ -78,8 +82,25 @@ def run_model(inputs: dict, paths: dict) -> dict:
         raise RuntimeError(f"GAMS solved but missing CSV outputs: {missing}. Moved: {moved}")
 
     results = parse_csv_results(out_dir)
+    results["_gams_timing"] = {
+        "gams_wall_seconds": gams_wall_seconds,
+        "gams_resource_seconds": _parse_resource_seconds(lst_file),
+    }
     log.info("Parsed v2 result CSV files from %s", out_dir)
     return results
+
+
+def _parse_resource_seconds(lst_file: Path) -> float | None:
+    """Extract the GAMS solver RESOURCE USAGE (solve seconds) from the listing.
+
+    GAMS writes a line like ``RESOURCE USAGE, LIMIT          3.142     1200.000``
+    in the solve report. Returns the solver time in seconds, or None if absent."""
+    try:
+        text = lst_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None
+    match = re.search(r"RESOURCE USAGE, LIMIT\s+([0-9.]+)", text)
+    return round(float(match.group(1)), 3) if match else None
 
 
 def _resolve_gams_exe() -> str:
