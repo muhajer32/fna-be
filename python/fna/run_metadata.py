@@ -54,20 +54,43 @@ def _iso(dt: datetime | None) -> str | None:
 
 
 def utc_stamp() -> str:
-    """Compact UTC timestamp used in run ids: ``20260618-173045Z``."""
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    """Compact UTC timestamp used in run ids: ``260618-173045Z``."""
+    return datetime.now(timezone.utc).strftime("%y%m%d-%H%M%SZ")
+
+
+def _mode_code(mode: str) -> str:
+    aliases = {
+        "deterministic": "det",
+        "det": "det",
+        "monte_carlo": "mc",
+        "monte-carlo": "mc",
+        "mc": "mc",
+        "multi_year": "my",
+        "multi-year": "my",
+    }
+    cleaned = re.sub(r"[^0-9a-z_-]+", "", str(mode).lower()) or "run"
+    return aliases.get(cleaned, cleaned.replace("-", "_")[:12])
+
+
+def _short_year(target_year: int | str | None) -> str:
+    if target_year in (None, ""):
+        return "yNA"
+    text = str(target_year).strip()
+    match = re.search(r"\d{2,4}", text)
+    if match:
+        return f"y{match.group(0)[-2:]}"
+    safe = re.sub(r"[^0-9A-Za-z]+", "", text)[:8] or "NA"
+    return f"y{safe}"
 
 
 def new_run_id(mode: str, target_year: int | str | None, input_stem: str) -> str:
     """Mint a unique, human-readable run id.
 
-    Example: ``20260618-173045Z__monte_carlo__y2030__BelgiumFNAv31FullYear2023``.
+    Example: ``260618-173045Z__mc__y30__BelgiumFNAv31FullYear2023``.
     Sortable by time (UTC), and self-describing (mode + year + input workbook).
     """
-    safe_stem = re.sub(r"[^0-9A-Za-z]+", "", str(input_stem))[:40] or "input"
-    year = f"y{target_year}" if target_year not in (None, "") else "yNA"
-    safe_mode = re.sub(r"[^0-9a-z_]+", "", str(mode).lower()) or "run"
-    return f"{utc_stamp()}__{safe_mode}__{year}__{safe_stem}"
+    safe_stem = re.sub(r"[^0-9A-Za-z]+", "", str(input_stem))[:32] or "input"
+    return f"{utc_stamp()}__{_mode_code(mode)}__{_short_year(target_year)}__{safe_stem}"
 
 
 # ---------------------------------------------------------------------------

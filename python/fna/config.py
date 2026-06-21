@@ -196,7 +196,8 @@ def make_run_paths(
     folders, charts, logs and the output workbook - lands inside this single
     folder, so deterministic runs, Monte Carlo runs and re-runs with different
     settings never overwrite each other. ``run_id`` is minted by
-    ``run_metadata.new_run_id`` (timestamp + mode + year + input stem).
+    ``run_metadata.new_run_id`` (short timestamp + mode code + short year +
+    input stem).
 
     Returns the same keys as ``PATHS`` plus ``run_dir``, ``run_id`` and
     ``output_xlsx`` (the per-run output workbook path). Monte Carlo scenario
@@ -212,7 +213,6 @@ def paths_from_run_dir(run_dir: Path, input_filename: str | None = None) -> dict
     against a previous run's outputs without re-solving."""
 
     run_dir = Path(run_dir)
-    stem = Path(input_filename or EXCEL_FILENAME).stem
     return {
         "gms_file": PATHS["gms_file"],
         "inc_dir": run_dir / "inc",
@@ -221,7 +221,7 @@ def paths_from_run_dir(run_dir: Path, input_filename: str | None = None) -> dict
         "img_dir": run_dir / "images",
         "run_dir": run_dir,
         "run_id": run_dir.name,
-        "output_xlsx": run_dir / f"{stem}-output.xlsx",
+        "output_xlsx": run_dir / f"{run_dir.name}-output.xlsx",
     }
 
 

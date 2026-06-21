@@ -169,8 +169,8 @@ Monte Carlo runs, and re-runs with different settings never collide:
 
 ```
 data/outputs/runs/
-  <run_id>/                       # <UTC>__<mode>__y<year>__<input-stem>
-    <stem>-output.xlsx            # results workbook for THIS run
+  <run_id>/                       # <YYMMDD-HHMMSSZ>__<det|mc>__y<YY>__<input-stem>
+    <run_id>-output.xlsx          # results workbook for THIS run
     run_metadata.json             # provenance + compute + timing
     csv/                          # GAMS CSV outputs: dispatch, residual, price, reserve, ...
     images/  inc/  gams_run.{log,lst}

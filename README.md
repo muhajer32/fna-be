@@ -47,8 +47,8 @@ other's CSVs, charts or workbooks:
 
 ```
 data/outputs/runs/
-  <run_id>/                         # run_id = <UTC timestamp>__<mode>__y<year>__<input stem>
-    <input stem>-output.xlsx        # results workbook for THIS run
+  <run_id>/                         # run_id = <YYMMDD-HHMMSSZ>__<det|mc>__y<YY>__<input stem>
+    <run_id>-output.xlsx            # results workbook for THIS run
     run_metadata.json               # provenance + compute + timing (see below)
     csv/                            # GAMS CSV outputs: dispatch, residual, price, reserve, ...
     images/                         # all charts for this run

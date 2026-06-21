@@ -535,13 +535,15 @@ def _open_workbook():
 
 
 def _open_output_workbook(input_wb: Any = None, out_path: Path | None = None):
-    """Open (or create) the ``<input stem>-output.xlsx`` workbook used for all
-    results/charts. Loads the existing file when present (so post-process runs
-    update it in place); otherwise starts a clean, empty workbook.
+    """Open (or create) the output workbook used for all results/charts.
+
+    Loads the existing file when present (so post-process runs update it in
+    place); otherwise starts a clean, empty workbook.
 
     ``out_path`` selects the workbook location; when omitted it falls back to the
     legacy ``data/outputs/<stem>-output.xlsx`` (used by the standalone fna_* helpers).
-    Run-isolated calls pass the per-run path so each run writes its own workbook.
+    Run-isolated calls pass the per-run ``<run_id>-output.xlsx`` path so each
+    run writes its own workbook.
     """
 
     out_path = Path(out_path) if out_path is not None else output_excel_path()
